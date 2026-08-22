@@ -6,7 +6,7 @@ Pagugu 计划使用 GitHub Issues，项目坐标为 `Dimon94/pagugu`：
 https://github.com/Dimon94/pagugu
 ```
 
-远程仓库尚未创建。创建前，远程 issue、PR、Actions 与 labels 状态均为 Unknown。
+公开远程仓库已创建。Issues 与 Wayfinder labels 可用；本地代码尚未推送，远程默认分支、PR 与 Actions 状态均为 Unknown。
 
 ## 约定
 
@@ -44,4 +44,4 @@ Blocked by: #12 #15
 
 ## GitHub Actions
 
-本地 workflow 位于 repo://.github/workflows/ci.yml。远程仓库与 workflow run 尚不存在，因此 CI 通过状态为 Unknown。
+本地 workflow 位于 repo://.github/workflows/ci.yml。代码尚未推送，远程 workflow run 不存在，因此 CI 通过状态为 Unknown。

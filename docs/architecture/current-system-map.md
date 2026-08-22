@@ -2,7 +2,7 @@
 
 Status: runnable baseline
 
-本文件描述当前可验证的系统边界。规划中的 Skill 扫描和更新能力不冒充现状。
+本文件描述当前可验证的系统边界。产品动机、目标用户与目标体验见 repo://docs/product/vision.md。规划中的 Skill 扫描和更新能力不冒充现状。
 
 ## 当前事实
 
@@ -12,7 +12,7 @@ Status: runnable baseline
 - 运行入口：`Pagugu/App/PaguguApp.swift`；稳定本地入口为 `script/build_and_run.sh`。
 - 分发：本地构建；App Sandbox 关闭。签名、公证和 GitHub Releases 尚未实现。
 - 持久状态：当前应用不读写持久状态。规划中的 App Registry 尚未实现。
-- 外部系统：当前运行时无外部系统。GitHub 仅用于计划中的公开托管与现有 CI 配置，远程仓库尚未创建。
+- 外部系统：当前运行时无外部系统。公开 GitHub 仓库已创建并用于 Issues；本地仓库尚未配置 remote 或推送代码，远程默认分支和 Actions 运行均不存在。
 
 ## 当前链路
 
@@ -68,4 +68,4 @@ xcodebuild test \
 
 ## PROTOCOL
 
-根合同变化时同步更新 repo://CONTEXT.md、repo://AGENTS.md 与命中模块的 L2-L6 合同。难回退且存在真实取舍的决定才写 accepted ADR。
+产品意图变化时先更新 repo://docs/product/vision.md。根合同变化时同步更新 repo://CONTEXT.md、repo://AGENTS.md 与命中模块的 L2-L6 合同。难回退且存在真实取舍的决定才写 accepted ADR。

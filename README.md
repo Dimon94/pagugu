@@ -6,6 +6,12 @@ Pagugu 是一个面向 Codex 与 Claude Code 的本地 macOS Agent Skill 管理�
 
 计划中的内容真相由 Git 源仓库拥有，Agent 安装目录只作为投影。Pagugu 只会自动更新干净且可 fast-forward 的已识别源仓库。
 
+## 产品与架构
+
+- [产品愿景](docs/product/vision.md)：产品动机、目标用户、目标体验与品牌方向。
+- [统一语言](CONTEXT.md)：项目使用的 canonical term。
+- [当前系统地图](docs/architecture/current-system-map.md)：当前实现、系统边界与产品不变量。
+
 ## 本地运行
 
 要求 macOS 14+、Xcode 26 或兼容的 Swift 6 工具链。
@@ -31,4 +37,4 @@ MIT
 
 ## 远程状态
 
-计划公开托管到 `Dimon94/pagugu`。本地 Git 已初始化，远程仓库尚未创建。
+公开仓库 `Dimon94/pagugu` 已创建并用于 Issues。本地 Git 已初始化，但尚未配置 remote 或推送代码。

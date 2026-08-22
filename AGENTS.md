@@ -7,6 +7,7 @@
 <project>
 定位：Pagugu 是面向 Codex 与 Claude Code 的本地 macOS Agent Skill 管理与安全同步应用。
 当前技术基线为原生 Xcode macOS App、SwiftUI、Swift 6、macOS 14+。稳定验证入口是 `repo://script/build_and_run.sh --verify` 与 `xcodebuild test -project Pagugu.xcodeproj -scheme Pagugu -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/DerivedData CODE_SIGNING_ALLOWED=NO`。
+产品愿景见 repo://docs/product/vision.md。触发：规划功能、撰写 PRD 或 issue、设计界面，以及变更产品定位、目标用户、核心体验或品牌方向；命中时同步更新该文档。
 真相优先级：运行证据和持久状态 > 源码与测试 > 仓库文档和 accepted ADR > 当前官方文档 > 推理。
 </project>
 
@@ -21,7 +22,7 @@
 </workflow>
 
 <forge>
-Issue、代码和 CI/CD 计划归 GitHub，项目坐标 `Dimon94/pagugu`；远程仓库尚未创建。Issue 约定见 repo://docs/agents/issue-tracker.md。触发：建/读/评/列 issue、取 ticket、发布 PRD、triage 标签、wayfinder 地图与 ticket 编排。
+Issue、代码和 CI/CD 计划归 GitHub，项目坐标 `Dimon94/pagugu`；公开远程仓库已创建，代码尚未推送。Issue 约定见 repo://docs/agents/issue-tracker.md。触发：建/读/评/列 issue、取 ticket、发布 PRD、triage 标签、wayfinder 地图与 ticket 编排。
 程序化访问使用 GitHub CLI `gh`。远程写入、创建仓库、push、PR 和 workflow 操作必须在执行前取得明确授权。
 </forge>
 
