@@ -97,6 +97,10 @@ _Avoid_: 把 UI 投影、Scan Issue 或检查结果当作检出状态；用组�
 : 针对单个 Skill Source Checkout 裁决的更新资格：Scan Result 完整、归因与 Skill 身份成立、按既定规则选定检出后，该检出的 Checkout Git State 为 update-available 是唯一充要条件。其余 11 态均不可更新，各配人工恢复方向。同一 Skill Source Key 下其他检出的状态不影响本检出的资格。同名异源本身不阻断更新，只在展示层要求消歧呈现。
 _Avoid_: 用 Installation 层状态或多检出聚合状态充当更新资格。
 
+**Update Run**
+: 对单个 Eligible Update 的一次执行过程：fetch 并重查目标检出、用户确认精确 target SHA、ff-only 应用、post-verify 与刷新。瞬态不持久、零自动重试、零自动回滚；Checkout Observation 永不充当执行许可，重查快照是唯一执行计划。
+_Avoid_: 持久化 run 记录或更新结果、把上次观察结果当执行许可、自动 reset/force 回滚。
+
 **Skill Read Model**
 : Pagugu 从 Skill Source、Skill Installation 与 Git 状态生成的只读 UI 投影。可更新性在 Skill Source Checkout 层逐检出裁决，Skill Installation 层只有归因状态。它不能反向成为第二真相。
 
