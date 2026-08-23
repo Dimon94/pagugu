@@ -81,6 +81,14 @@ _Avoid_: 静默删除失效记录、用部分或失败 Scan Result 判定失效�
 : 对单个 Skill Source Checkout 实时只读检查得到的正交原始事实，是 Checkout Git State 裁决的唯一输入。缓存、日志、UI 与 App Registry 不得充当 Git Fact。
 _Avoid_: 用上次观察结果或 UI 投影替代实时 Git 事实。
 
+**Check Run**
+: 一次手动触发、对启动时刻完整 Scan Result 快照中全部应检查 Skill Source Checkout 执行检查的过程。瞬态不持久，scope 在启动时冻结；run 中身份变化的检出在发布校验时丢弃其观察，不错绑到另一个物理检出。
+_Avoid_: 单检出或局部检查入口（MVP 1.0 只有全量）、持久化 run 聚合状态。
+
+**Checkout Observation**
+: Check Run 对单个 Skill Source Checkout 的完成结果：成功（含远端 tip sha 证据）或失败，附完成时间与身份摘要。App Registry 只持久逐检出单槽的上次观察结果；有效性由实时身份摘要与 remote-tracking ref 比对完全派生，无 TTL，永不充当当前 Git 真相。
+_Avoid_: 用上次观察结果替代实时 Git Fact、持久化 Checkout Git State 或 Eligible 结论、引入 TTL 过期字段或有效/失效标志位。
+
 **Checkout Git State**
 : 由 Git Fact 与检查结果确定性派生的单个 Skill Source Checkout 互斥主状态。共 12 态，按固定 precedence 取主恢复方向：inspection-failed > no-remote > detached > no-upstream > upstream-mismatch > sibling-conflict > check-unknown > dirty > diverged > ahead-only > update-available > up-to-date。每个阻断态配一句人工恢复方向；全部 Git Fact 仍逐检出保留。
 _Avoid_: 把 UI 投影、Scan Issue 或检查结果当作检出状态；用组合状态枚举替代互斥主状态。
