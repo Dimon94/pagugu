@@ -39,7 +39,7 @@ Status: runnable baseline
 
 - Skill Source 的 canonical owner 是 Git 仓库；Skill Installation 只是投影。
 - 只有干净且可 fast-forward 的已识别 Skill Source 才允许自动更新。
-- 脏仓库、分叉、无远程或同名异源必须 fail closed，并提供人工恢复动作。
+- 脏仓库、分叉或无远程的 Skill Source，以及 Unattributed Installation，必须 fail closed，并提供人工恢复动作；同名异源本身不阻断更新。
 - Pagugu 不直接覆盖未知所有权的安装目录。
 - UI、缓存、日志和 App Registry 均不能成为 Skill 内容的第二真相。
 
