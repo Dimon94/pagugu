@@ -15,9 +15,17 @@ _Avoid_: 把 `.agents`、`.claude` 或 `.codex` 目录本身当成 Agent。
 : 拥有一个或多个 Skill 内容的 canonical Git 仓库。它是 Skill 内容的唯一真相。
 _Avoid_: 每个 Skill 必须对应独立仓库、按安装目录猜远程来源。
 
+**Skill Source Key**
+: Skill Source 的稳定标识。有 `origin` 远程时为规范化远程 URL；无远程时为仓库 canonical 绝对路径。
+_Avoid_: 把未规范化的远程 URL 原文当键、按安装目录反推来源。
+
 **Skill Installation**
 : Agent Host 可读取的 Skill 投影。它可以是软链接、复制内容或受托管插件提供的有效来源。
 _Avoid_: 把安装投影反向当成 Skill Source、覆盖同名异源内容。
+
+**Skill Identity**
+: 判定同一个 Skill 的稳定事实，由 Skill Source Key 与 Skill 在仓库内的相对路径构成。frontmatter `name` 与安装目录名只是展示元数据，不参与身份判定。
+_Avoid_: 用 frontmatter `name`、安装目录名或安装位置作去重主键。
 
 **Personal Skill Root**
 : Pagugu 自动发现个人 Skill Installation 的受支持根目录。首批为 `~/.claude/skills`、`~/.agents/skills` 与 `~/.codex/skills`。
@@ -37,6 +45,8 @@ _Avoid_: 把安装投影反向当成 Skill Source、覆盖同名异源内容。
 ## 仍为 Unknown
 
 - Skill 状态枚举和详情字段的最终公开合同。
+- Skill Source Key 的远程 URL 规范化细则（HTTPS 与 SSH 归一、`.git` 尾缀、大小写）与 fork 同源判定。
+- 无远程 Skill Source 移动目录后的身份连续性策略。
 - 托管插件来源的首批支持范围。
 - 签名、公证与 GitHub Releases 发布流程。
 - 专业商标可用性。
