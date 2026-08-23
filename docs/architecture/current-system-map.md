@@ -42,6 +42,7 @@ Status: runnable baseline
 - 脏仓库、分叉或无远程的 Skill Source，以及 Unattributed Installation，必须 fail closed，并提供人工恢复动作；同名异源本身不阻断更新。
 - Pagugu 不直接覆盖未知所有权的安装目录。
 - UI、缓存、日志和 App Registry 均不能成为 Skill 内容的第二真相。
+- 人工来源映射是对文件系统与 Git 事实的主张：每次完整 Discovery Scan 重验证，事实优先；失效不静默删除，只能由用户显式删除。
 
 ## 明确未实现
 

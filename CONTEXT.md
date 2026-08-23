@@ -31,7 +31,7 @@ _Avoid_: 把安装投影反向当成 Skill Source、覆盖同名异源内容。
 : Skill Installation 的形态分类：软链接、复制、仓库本体（安装路径即 Skill Source 工作树）。软链接完全解析后归因到目标所在的 Skill Source；复制不自动归因。
 
 **Unattributed Installation**
-: 无法唯一归因到 Skill Source 的 Skill Installation（界面标注「来源不明」）：软链接目标不在任何已发现 Skill Source 内，或复制投影尚未维护来源映射。不参与去重合并、不可更新，维护来源映射后获得身份。
+: 无法唯一归因到 Skill Source 的 Skill Installation（界面标注「来源不明」）：软链接目标不在任何已发现 Skill Source 内，或复制投影没有有效的来源映射。不参与去重合并、不可更新，维护有效来源映射后获得身份。
 _Avoid_: 用内容哈希或相似度启发式自动归因复制投影（MVP 1.0 不做）。
 
 **Skill Identity**
@@ -62,6 +62,14 @@ _Avoid_: 把 Scan Issue 当成 Skill 状态。
 : 完全解析软链接后的绝对路径。归因、去重与无远程 Skill Source Key 使用 Canonical Path；界面展示使用 as-found 路径。
 _Avoid_: 用 as-found 路径做归因或去重。
 
+**来源映射**
+: 用户为复制投影维护的归因主张：Skill Installation 的 Canonical Path 指向一个 Skill Identity。只对 Unattributed Installation 开放，一个 Installation 至多一条；软链接与仓库本体的自动归因不可覆盖。映射目标必须是当前已发现的 Skill。它是主张而非事实：每次完整 Discovery Scan 重验证，当前文件系统与 Git 事实优先。
+_Avoid_: 人工覆盖软链接或仓库本体的归因、把映射指向未发现的来源、用映射记录反推磁盘事实。
+
+**失效映射**
+: 依赖事实不再成立的来源映射：Installation 不再作为复制投影的 Skill Installation 被发现、目标 Skill Source Key 不再被发现，或仓内相对路径不存在。失效判定只在完整 Scan Result 下进行；Installation 回到 Unattributed Installation；记录保留并呈现原因，事实重新成立时自动复活，只能由用户显式删除。
+_Avoid_: 静默删除失效记录、用部分或失败 Scan Result 判定失效、引入人工确认复活中间态。
+
 **App Registry**
 : Pagugu 未来在 Application Support 中保存的单个本地 JSON。它只拥有 Project Scan Root、来源映射、检查计划和上次观察结果，不拥有 Skill 内容。
 
@@ -74,7 +82,6 @@ _Avoid_: 用 as-found 路径做归因或去重。
 ## 仍为 Unknown
 
 - Skill 状态枚举和详情字段的最终公开合同。
-- 无远程 Skill Source 移动目录后的身份连续性策略。
 - 托管插件来源的首批支持范围。
 - 签名、公证与 GitHub Releases 发布流程。
 - 专业商标可用性。
