@@ -75,7 +75,7 @@ _Avoid_: 人工覆盖软链接或仓库本体的归因、把映射指向未发�
 _Avoid_: 静默删除失效记录、用部分或失败 Scan Result 判定失效、引入人工确认复活中间态。
 
 **App Registry**
-: Pagugu 未来在 Application Support 中保存的单个本地 JSON。它只拥有 Project Scan Root、来源映射、检查计划和上次观察结果，不拥有 Skill 内容。
+: Pagugu 未来在 Application Support 中保存的单个本地 JSON。它只拥有 Project Scan Root、来源映射、检查计划和上次观察结果，不拥有 Skill 内容与审计证据。
 
 **Git Fact**
 : 对单个 Skill Source Checkout 实时只读检查得到的正交原始事实，是 Checkout Git State 裁决的唯一输入。缓存、日志、UI 与 App Registry 不得充当 Git Fact。
@@ -100,6 +100,14 @@ _Avoid_: 用 Installation 层状态或多检出聚合状态充当更新资格。
 **Update Run**
 : 对单个 Eligible Update 的一次执行过程：fetch 并重查目标检出、用户确认精确 target SHA、ff-only 应用、post-verify 与刷新。瞬态不持久、零自动重试、零自动回滚；Checkout Observation 永不充当执行许可，重查快照是唯一执行计划。
 _Avoid_: 持久化 run 记录或更新结果、把上次观察结果当执行许可、自动 reset/force 回滚。
+
+**审计证据（Audit Evidence）**
+: Pagugu 为手动检查、更新与来源映射维护保留的最小历史证据整体。它只回答「用户做过什么、结果是什么、下一步怎么办」；永不充当当前 Git 状态、Eligible Update、Checkout Observation freshness、执行许可或自动恢复依据。
+_Avoid_: 用审计证据推断当前状态或驱动副作用；日志、遥测。
+
+**审计记录（Audit Record）**
+: 审计证据中的单条记录：一次用户发起动作（Check Run、Update Run、来源映射创建或删除）的历史证据。append-only，写入后永不更新、合并或改写；Update Run 由确认绑定时刻的开始记录与 terminal 记录两段构成；只有开始没有 terminal 的记录呈现为结果未知（已中断），永不解释为正在运行。
+_Avoid_: 记录派生状态变化或原始命令输出；可改写历史。
 
 **Skill Read Model**
 : Pagugu 从 Skill Source、Skill Installation 与 Git 状态生成的只读 UI 投影。可更新性在 Skill Source Checkout 层逐检出裁决，Skill Installation 层只有归因状态。它不能反向成为第二真相。
