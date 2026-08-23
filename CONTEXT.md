@@ -23,6 +23,10 @@ _Avoid_: 每个 Skill 必须对应独立仓库、按安装目录猜远程来源�
 : Skill Source 的稳定标识。有 `origin` 远程时为规范化远程 URL（归一到 host 与仓库路径：忽略协议与认证方式、去 `.git` 尾缀、host 小写、路径大小写不归一）；无远程时为仓库 canonical 绝对路径。fork 是不同的 Skill Source。
 _Avoid_: 把未规范化的远程 URL 原文当键、按安装目录反推来源、把 fork 合并为同一来源。
 
+**Skill Source Checkout**
+: 一个 Skill Source Key 在本机的一个物理 Git 工作树，以其工作树根的 Canonical Path 标识。独立 clone 与 Git worktree 链接工作树都是 Skill Source Checkout；多个检出是否共享同一 Git 仓库由 Git 事实派生。重叠 Scan Root 命中同一工作树根，只产生同一检出的多个 as-found 入口。
+_Avoid_: 副本、拷贝；用 Worktree 统称全部物理检出。
+
 **Skill Installation**
 : Agent Host 可读取的 Skill 投影。它可以是软链接、复制内容或受托管插件提供的有效来源。
 _Avoid_: 把安装投影反向当成 Skill Source、覆盖同名异源内容。
@@ -74,10 +78,10 @@ _Avoid_: 静默删除失效记录、用部分或失败 Scan Result 判定失效�
 : Pagugu 未来在 Application Support 中保存的单个本地 JSON。它只拥有 Project Scan Root、来源映射、检查计划和上次观察结果，不拥有 Skill 内容。
 
 **Eligible Update**
-: 已识别 Skill Source 处于干净状态，并且能够 fast-forward 到远程目标。脏仓库、分叉或无远程的 Skill Source，以及 Unattributed Installation，均不符合条件。同名异源本身不阻断更新，只在展示层要求消歧呈现。
+: 针对单个 Skill Source Checkout 裁决的更新资格：该检出工作树干净，并且能够 fast-forward 到远程目标。脏、分叉或无远程来源的检出，以及 Unattributed Installation，均不符合条件。同一 Skill Source Key 下其他检出的状态不影响本检出的资格。同名异源本身不阻断更新，只在展示层要求消歧呈现。
 
 **Skill Read Model**
-: Pagugu 从 Skill Source、Skill Installation 与 Git 状态生成的只读 UI 投影。可更新性在 Skill Source 层裁决一次，Skill Installation 层只有归因状态。它不能反向成为第二真相。
+: Pagugu 从 Skill Source、Skill Installation 与 Git 状态生成的只读 UI 投影。可更新性在 Skill Source Checkout 层逐检出裁决，Skill Installation 层只有归因状态。它不能反向成为第二真相。
 
 ## 仍为 Unknown
 
