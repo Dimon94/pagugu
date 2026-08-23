@@ -75,7 +75,8 @@ _Avoid_: 人工覆盖软链接或仓库本体的归因、把映射指向未发�
 _Avoid_: 静默删除失效记录、用部分或失败 Scan Result 判定失效、引入人工确认复活中间态。
 
 **App Registry**
-: Pagugu 未来在 Application Support 中保存的单个本地 JSON。它只拥有 Project Scan Root、来源映射、检查计划和上次观察结果，不拥有 Skill 内容与审计证据。
+: Pagugu 在 Application Support 中保存的单个本地 JSON。它恰好拥有三类当前主张：Project Scan Root 集合、来源映射集合与逐检出单槽上次观察结果；不拥有 Skill 内容、任何派生状态与审计证据——审计证据是物理独立的 append-only 历史集合。持久合同见 repo://docs/adr/0008-app-registry-persistence-contract.md。
+_Avoid_: 把派生状态、运行中状态或审计历史当作 Registry 内容；把检查计划当作 MVP 1.0 的持久字段。
 
 **Git Fact**
 : 对单个 Skill Source Checkout 实时只读检查得到的正交原始事实，是 Checkout Git State 裁决的唯一输入。缓存、日志、UI 与 App Registry 不得充当 Git Fact。
