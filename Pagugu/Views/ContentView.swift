@@ -1,13 +1,12 @@
 import SwiftUI
 
+// PROTOTYPE / THROWAWAY — issue #10（Wayfinder map #1）
+// 本 worktree 中基线占位内容整体替换为 MVP 1.0 主窗口闭环原型（内存 stub + variant 切换）。
+// 只存在于本 worktree，不是生产实现；不得直接晋升生产。
 struct ContentView: View {
     var body: some View {
-        ContentUnavailableView {
-            Label("Pagugu 已准备好", systemImage: "shippingbox")
-        } description: {
-            Text("Skill 扫描将在下一个功能切片中加入。")
-        }
-        .frame(minWidth: 640, minHeight: 420)
+        PrototypeRootView()
+            .frame(minWidth: 860, minHeight: 560)
     }
 }
 

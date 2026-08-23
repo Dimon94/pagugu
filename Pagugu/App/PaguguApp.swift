@@ -13,10 +13,11 @@ struct PaguguApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        WindowGroup(AppIdentity.displayName, id: AppIdentity.mainWindowID) {
+        // PROTOTYPE / THROWAWAY — issue #10：窗口标题标注原型身份，只存在于本 worktree。
+        WindowGroup("\(AppIdentity.displayName) · PROTOTYPE", id: AppIdentity.mainWindowID) {
             ContentView()
         }
-        .defaultSize(width: 900, height: 600)
+        .defaultSize(width: 980, height: 640)
 
         MenuBarExtra(AppIdentity.displayName, systemImage: "shippingbox") {
             MenuBarView()
