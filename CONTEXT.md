@@ -12,7 +12,7 @@
 _Avoid_: 把 `.agents`、`.claude` 或 `.codex` 目录本身当成 Agent。
 
 **Skill**
-: Skill Source 内一个仓内路径下的 Skill 内容单元，由 Skill Identity 标识。它是列表的 canonical 条目，聚合自身全部 Skill Installation。
+: Skill Source 内一个仓内路径下的 Skill 内容单元，由 Skill Identity 标识。它是列表的 canonical 条目，聚合自身全部 Skill Installation。在 Project Scan Root 中发现的 Skill 可以没有任何 Skill Installation（仅来源条目）。
 _Avoid_: 把单个 Skill Installation 或安装目录当成 Skill 本身。
 
 **Skill Source**
@@ -42,7 +42,25 @@ _Avoid_: 用 frontmatter `name`、安装目录名或安装位置作去重主键�
 : Pagugu 自动发现个人 Skill Installation 的受支持根目录。首批为 `~/.claude/skills`、`~/.agents/skills` 与 `~/.codex/skills`。
 
 **Project Scan Root**
-: 用户明确选择并保存的项目父目录。Pagugu 只在这些目录内递归发现项目级 Skill，不遍历整个 Home。
+: 用户明确选择并保存的项目父目录。Pagugu 只在这些目录内递归发现任意含 SKILL.md 的目录，不遍历整个 Home。保存时校验：不得为文件系统根、Home 目录、Personal Skill Root 本身或其祖先。
+
+**Scan Root**
+: Personal Skill Root 与 Project Scan Root 的统称。Pagugu 的全部发现动作只发生在 Scan Root 内。
+
+**Discovery Scan**
+: 遍历全部 Scan Root 发现 Skill 与 Skill Installation 的动作。它跟随软链接并以 Canonical Path 去重，产出 Scan Result。
+_Avoid_: 用缓存或上次观察结果替代实时遍历。
+
+**Scan Result**
+: 一次 Discovery Scan 的产物，分完整、部分、失败三态。部分或失败结果不得充当完整真相参与更新资格裁决。
+
+**Scan Issue**
+: Discovery Scan 中跳过的单项问题（不可读目录、断链、不可解析的 SKILL.md 等），含路径与原因。它不计为 Skill，不参与去重与裁决。
+_Avoid_: 把 Scan Issue 当成 Skill 状态。
+
+**Canonical Path**
+: 完全解析软链接后的绝对路径。归因、去重与无远程 Skill Source Key 使用 Canonical Path；界面展示使用 as-found 路径。
+_Avoid_: 用 as-found 路径做归因或去重。
 
 **App Registry**
 : Pagugu 未来在 Application Support 中保存的单个本地 JSON。它只拥有 Project Scan Root、来源映射、检查计划和上次观察结果，不拥有 Skill 内容。
@@ -60,3 +78,4 @@ _Avoid_: 用 frontmatter `name`、安装目录名或安装位置作去重主键�
 - 托管插件来源的首批支持范围。
 - 签名、公证与 GitHub Releases 发布流程。
 - 专业商标可用性。
+- 各 Agent Host 对 skills 目录的精确加载规则（递归深度、隐藏目录、无效 frontmatter 容错）官方未完整写明；Codex 是否读取项目内 `.codex/skills` 未知。
