@@ -77,15 +77,24 @@ _Avoid_: 静默删除失效记录、用部分或失败 Scan Result 判定失效�
 **App Registry**
 : Pagugu 未来在 Application Support 中保存的单个本地 JSON。它只拥有 Project Scan Root、来源映射、检查计划和上次观察结果，不拥有 Skill 内容。
 
+**Git Fact**
+: 对单个 Skill Source Checkout 实时只读检查得到的正交原始事实，是 Checkout Git State 裁决的唯一输入。缓存、日志、UI 与 App Registry 不得充当 Git Fact。
+_Avoid_: 用上次观察结果或 UI 投影替代实时 Git 事实。
+
+**Checkout Git State**
+: 由 Git Fact 与检查结果确定性派生的单个 Skill Source Checkout 互斥主状态。共 12 态，按固定 precedence 取主恢复方向：inspection-failed > no-remote > detached > no-upstream > upstream-mismatch > sibling-conflict > check-unknown > dirty > diverged > ahead-only > update-available > up-to-date。每个阻断态配一句人工恢复方向；全部 Git Fact 仍逐检出保留。
+_Avoid_: 把 UI 投影、Scan Issue 或检查结果当作检出状态；用组合状态枚举替代互斥主状态。
+
 **Eligible Update**
-: 针对单个 Skill Source Checkout 裁决的更新资格：该检出工作树干净，并且能够 fast-forward 到远程目标。脏、分叉或无远程来源的检出，以及 Unattributed Installation，均不符合条件。同一 Skill Source Key 下其他检出的状态不影响本检出的资格。同名异源本身不阻断更新，只在展示层要求消歧呈现。
+: 针对单个 Skill Source Checkout 裁决的更新资格：Scan Result 完整、归因与 Skill 身份成立、按既定规则选定检出后，该检出的 Checkout Git State 为 update-available 是唯一充要条件。其余 11 态均不可更新，各配人工恢复方向。同一 Skill Source Key 下其他检出的状态不影响本检出的资格。同名异源本身不阻断更新，只在展示层要求消歧呈现。
+_Avoid_: 用 Installation 层状态或多检出聚合状态充当更新资格。
 
 **Skill Read Model**
 : Pagugu 从 Skill Source、Skill Installation 与 Git 状态生成的只读 UI 投影。可更新性在 Skill Source Checkout 层逐检出裁决，Skill Installation 层只有归因状态。它不能反向成为第二真相。
 
 ## 仍为 Unknown
 
-- Skill 状态枚举和详情字段的最终公开合同。
+- Skill 呈现层状态聚合与详情字段的最终公开合同（Git 层 Checkout Git State 枚举已由 Dimon94/pagugu#5 冻结）。
 - 托管插件来源的首批支持范围。
 - 签名、公证与 GitHub Releases 发布流程。
 - 专业商标可用性。

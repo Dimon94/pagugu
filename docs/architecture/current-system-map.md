@@ -38,10 +38,10 @@ Status: runnable baseline
 未来实现扫描与更新时必须保持：
 
 - Skill Source 的 canonical owner 是 Git 仓库；Skill Installation 只是投影。
-- 只有干净且可 fast-forward 的已识别 Skill Source Checkout 才允许更新；一次更新只作用于一个明确选定的物理工作树，禁止自动同步全部 clone 与 worktree。
-- 脏、分叉或无远程来源的 Skill Source Checkout，以及 Unattributed Installation，必须 fail closed，并提供人工恢复动作；同名异源与同一 Skill Source Key 下其他检出的状态本身不阻断更新。
+- 只有 Checkout Git State 为 update-available 的 Skill Source Checkout 才允许更新：inspection 成功、upstream 身份与 Skill Source Key 一致、无兄弟 worktree 冲突、严格干净、存在成功检查结果且 behind-only。一次更新只作用于一个明确选定的物理工作树，禁止自动同步全部 clone 与 worktree。
+- 其余 11 个 Checkout Git State（inspection-failed、no-remote、detached、no-upstream、upstream-mismatch、sibling-conflict、check-unknown、dirty、diverged、ahead-only、up-to-date），以及 Unattributed Installation、失效映射与不完整 Scan Result，必须 fail closed，各配人工恢复方向；同名异源与同一 Skill Source Key 下其他检出的状态本身不阻断更新。
 - Pagugu 不直接覆盖未知所有权的安装目录。
-- UI、缓存、日志和 App Registry 均不能成为 Skill 内容的第二真相。
+- UI、缓存、日志和 App Registry 均不能成为 Skill 内容或 Git 状态的第二真相；Checkout Git State 由实时 Git Fact 确定性派生，上次观察结果不充当当前 Git 事实。
 - 人工来源映射是对文件系统与 Git 事实的主张：每次完整 Discovery Scan 重验证，事实优先；失效不静默删除，只能由用户显式删除。
 
 ## 明确未实现
