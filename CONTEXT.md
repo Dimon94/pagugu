@@ -48,10 +48,10 @@ _Avoid_: 用 frontmatter `name`、安装目录名或安装位置作去重主键�
 : Pagugu 未来在 Application Support 中保存的单个本地 JSON。它只拥有 Project Scan Root、来源映射、检查计划和上次观察结果，不拥有 Skill 内容。
 
 **Eligible Update**
-: 已识别 Skill Source 处于干净状态，并且能够 fast-forward 到远程目标。脏仓库、分叉、无远程或同名异源均不符合条件。
+: 已识别 Skill Source 处于干净状态，并且能够 fast-forward 到远程目标。脏仓库、分叉或无远程的 Skill Source，以及 Unattributed Installation，均不符合条件。同名异源本身不阻断更新，只在展示层要求消歧呈现。
 
 **Skill Read Model**
-: Pagugu 从 Skill Source、Skill Installation 与 Git 状态生成的只读 UI 投影。它不能反向成为第二真相。
+: Pagugu 从 Skill Source、Skill Installation 与 Git 状态生成的只读 UI 投影。可更新性在 Skill Source 层裁决一次，Skill Installation 层只有归因状态。它不能反向成为第二真相。
 
 ## 仍为 Unknown
 
