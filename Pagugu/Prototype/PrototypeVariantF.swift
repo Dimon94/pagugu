@@ -48,12 +48,25 @@ struct PrototypeVariantFView: View {
             .toolbar { detailToolbar }
         }
         .sheet(isPresented: $showActivity) {
-            VStack(alignment: .leading) { StubAuditSection(world: world) }
-                .padding(16).frame(width: 560, height: 420)
+            StubAuditSection(world: world, onClose: { showActivity = false })
+                .padding(20)
+                .frame(width: 600, height: min(150 + CGFloat(world.audit.count) * 47, 470))
         }
         .sheet(isPresented: $showScanRoots) {
-            VStack(alignment: .leading) { StubScanRootSection(world: world) }
-                .padding(16).frame(width: 520)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Spacer()
+                    Button { showScanRoots = false } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("关闭")
+                }
+                StubScanRootSection(world: world)
+            }
+            .padding(16).frame(width: 520)
         }
         .onAppear {
             if selection == nil, !world.scanRoots.isEmpty { selection = firstNode }
@@ -151,6 +164,7 @@ struct PrototypeVariantFView: View {
                         .foregroundStyle(phraseColor(of: source))
                         .padding(.leading, 36)
                 }
+                .padding(.vertical, 2)
                 .tag(Node.repo(id))
             }
         case .skill(let id):
@@ -162,6 +176,7 @@ struct PrototypeVariantFView: View {
                     hostSlots(activeHosts(of: skill))
                 }
                 .padding(.leading, 36)
+                .padding(.vertical, 2)
                 .tag(Node.skill(id))
             }
         case .unattributed(let id):
@@ -175,6 +190,7 @@ struct PrototypeVariantFView: View {
                     Spacer()
                     hostSlots([item.host])
                 }
+                .padding(.vertical, 2)
                 .tag(Node.unattributed(id))
             }
         }
@@ -312,8 +328,14 @@ struct PrototypeVariantFView: View {
         }
         ToolbarItem(placement: .status) {
             if let last = world.lastObservationTime {
-                Text("上次检查 \(last.formatted(date: .omitted, time: .shortened))")
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Image(systemName: "clock")
+                    Text("上次检查 \(last.formatted(date: .omitted, time: .shortened))")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(.quaternary.opacity(0.5), in: Capsule())
             }
         }
         ToolbarItem(placement: .automatic) {

@@ -39,8 +39,11 @@ struct StubNoticeBanner: View {
                 .buttonStyle(.plain)
                 .help("关闭")
             }
-            .padding(.horizontal, 12).padding(.vertical, 8)
+            .padding(.horizontal, 12).padding(.vertical, 7)
             .background((world.noticeIsWarning ? Color.orange : Color.blue).opacity(0.08))
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(.primary.opacity(0.08)).frame(height: 1)
+            }
         }
     }
 }
@@ -77,14 +80,6 @@ struct PrototypeScenarioBar: View {
                 }
 
                 Spacer()
-
-                if let notice = world.notice {
-                    Text(notice)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .frame(maxWidth: 520, alignment: .trailing)
-                }
             }
             Text(world.scenario.guide)
                 .font(.caption)
@@ -346,9 +341,10 @@ struct StubCheckoutCard: View {
                 }
             }
         }
-        .padding(10)
-        .background(.background, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+        .padding(12)
+        .background(.background, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.primary.opacity(0.06), lineWidth: 1))
+        .shadow(color: .black.opacity(0.05), radius: 3, x: 0, y: 1)
     }
 }
 
@@ -474,8 +470,8 @@ struct StubConfirmView: View {
                     LabeledContent("Skill", value: "\(plan.sourceKey) 的 \(plan.relativePath)")
                     LabeledContent("工作树", value: plan.checkoutPath)
                     LabeledContent("分支", value: "\(plan.branch)（跟踪 \(plan.upstream)）")
-                    LabeledContent("当前", value: plan.headSHA)
-                    LabeledContent("更新到", value: plan.targetSHA)
+                    factRow("当前", plan.headSHA)
+                    factRow("更新到", plan.targetSHA)
                     LabeledContent("落后", value: "\(plan.behind) 个提交")
                 }
             }
@@ -498,6 +494,16 @@ struct StubConfirmView: View {
                 .font(.caption2).foregroundStyle(.secondary)
         }
         .padding(24).frame(width: 500)
+    }
+
+    private func factRow(_ label: String, _ sha: String) -> some View {
+        LabeledContent {
+            Text(sha)
+                .font(.system(.callout, design: .monospaced))
+                .textSelection(.enabled)
+        } label: {
+            Text(label)
+        }
     }
 
     private var selectedBinding: Binding<String> {
@@ -626,9 +632,10 @@ struct StubUnattributedCard: View {
                 }
             }
         }
-        .padding(10)
-        .background(.background, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+        .padding(12)
+        .background(.background, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.primary.opacity(0.06), lineWidth: 1))
+        .shadow(color: .black.opacity(0.05), radius: 3, x: 0, y: 1)
         .confirmationDialog("删除这条失效映射记录？", isPresented: $confirmDeleteMapping, titleVisibility: .visible) {
             Button("删除记录", role: .destructive) { world.deleteInvalidMapping(item.id) }
             Button("取消", role: .cancel) {}
@@ -642,42 +649,69 @@ struct StubUnattributedCard: View {
 
 struct StubAuditSection: View {
     let world: PrototypeWorld
+    /// 作为 sheet 呈现时提供：右上角显式关闭按钮。
+    var onClose: (() -> Void)?
+
     @State private var detailRecord: StubAuditRecord?
     @State private var confirmClear = false
 
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text("最近活动").font(.headline)
                     Text("历史证据，只是当时记录；不代表当前状态")
-                        .font(.caption2).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("清空历史") { confirmClear = true }
-                        .disabled(world.audit.isEmpty)
-                        .foregroundStyle(.red)
-                }
-                if world.audit.isEmpty {
-                    Text("暂无记录。检查、更新与来源映射的建立/删除会出现在这里。")
                         .font(.caption).foregroundStyle(.secondary)
-                } else {
-                    ForEach(world.audit) { record in
-                        Button { detailRecord = record } label: {
-                            HStack {
-                                Image(systemName: icon(for: record))
-                                Text(record.subject).font(.callout)
-                                Text(record.kind.rawValue).font(.caption).foregroundStyle(.secondary)
-                                Spacer()
-                                Text(record.outcomeDisplay)
-                                    .font(.caption)
-                                    .foregroundStyle(record.isOrphanUpdateStart || record.outcome == "failed" ? .orange : .secondary)
-                                Text(record.time.formatted(date: .omitted, time: .shortened))
-                                    .font(.caption2).foregroundStyle(.tertiary)
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
+                }
+                Spacer()
+                if !world.audit.isEmpty {
+                    Button("清空…") { confirmClear = true }
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                if let onClose {
+                    Button {
+                        onClose()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.tertiary)
                     }
+                    .buttonStyle(.plain)
+                    .help("关闭")
+                }
+            }
+            .padding(.bottom, 8)
+
+            if world.audit.isEmpty {
+                Text("暂无记录。检查、更新与来源映射的建立/删除会出现在这里。")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 30)
+            } else {
+                ForEach(Array(world.audit.enumerated()), id: \.element.id) { index, record in
+                    if index > 0 {
+                        Divider().padding(.leading, 38)
+                    }
+                    Button { detailRecord = record } label: {
+                        HStack(spacing: 10) {
+                            kindIcon(record)
+                            VStack(alignment: .leading, spacing: 1) {
+                                HStack {
+                                    Text(record.subject)
+                                        .font(.callout.weight(.medium))
+                                        .lineLimit(1)
+                                    Spacer()
+                                    outcomeLabel(record)
+                                }
+                                Text("\(record.kind.rawValue) · \(record.time.formatted(.relative(presentation: .named)))")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                        .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -692,11 +726,37 @@ struct StubAuditSection: View {
         }
     }
 
-    private func icon(for record: StubAuditRecord) -> String {
-        switch record.kind {
-        case .checkRun: return "arrow.triangle.2.circlepath"
-        case .updateRun: return record.isOrphanUpdateStart ? "questionmark.circle" : "arrow.down.circle"
-        case .mapping: return "link"
+    private func kindIcon(_ record: StubAuditRecord) -> some View {
+        let (icon, tint): (String, Color) = {
+            switch record.kind {
+            case .checkRun: return ("arrow.triangle.2.circlepath", .blue)
+            case .updateRun: return (record.isOrphanUpdateStart ? "questionmark.circle" : "arrow.down.circle", .purple)
+            case .mapping: return ("link", .teal)
+            }
+        }()
+        return ZStack {
+            Circle().fill(tint.opacity(0.12))
+            Image(systemName: icon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(tint)
+        }
+        .frame(width: 28, height: 28)
+    }
+
+    private func outcomeLabel(_ record: StubAuditRecord) -> some View {
+        let tint: Color = {
+            if record.isOrphanUpdateStart { return .orange }
+            switch record.outcome {
+            case "failed", "partial": return .orange
+            case "success", "complete", "created": return .green
+            default: return .secondary
+            }
+        }()
+        return HStack(spacing: 5) {
+            Circle().fill(tint).frame(width: 5, height: 5)
+            Text(record.outcomeDisplay)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 }
