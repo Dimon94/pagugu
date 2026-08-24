@@ -6,6 +6,8 @@
 
 **这不是生产实现，不得直接晋升生产。** 全部状态只在内存；Git、扫描、Registry、Audit 均为 stub；不读写任何真实用户数据。
 
+**Verdict 已确认（2026-08-24，HITL）：Variant F「主从（目录 + 详情 + 原文）」。** 完整裁决、被否决方向、为 #11 的验收场景与剩余 Unknown 见 `Pagugu/Prototype/DECISION.md`。
+
 ## 运行
 
 ```bash
@@ -14,15 +16,18 @@
 
 窗口标题为 `Pagugu · PROTOTYPE`。顶部紫色条是原型工具（场景 + 模拟 + 提示），底部浮层切换 variant（也可按 ← / →；文本输入聚焦时不截获方向键）。状态栏入口行为不变：只打开主窗口 / 退出。
 
-## 三个结构性不同的 variant
+## Variants（A–E 已淘汰，F 为 validated verdict）
 
-| Variant | 信息架构核心 | 布局 | 主 affordance |
-| --- | --- | --- | --- |
-| A「Skill 目录」 | Skill 聚合列表 | NavigationSplitView master-detail，侧栏按状态分组 | 选中条目后在详情页操作 |
-| B「行动工作台」 | 任务/状态队列 | 单列 dashboard：状态条 → 行动卡片 → 全部 Skill 表格 → 最近活动 | 直接在行动卡片上操作 |
-| C「来源地图」 | Skill Source 关系 | 双栏：来源树（来源 → 检出 → Skill）+ 关系详情 | 选中来源/检出节点后操作 |
+| Variant | 信息架构核心 | 结局 |
+| --- | --- | --- |
+| A「Skill 目录」 | Skill 聚合 master-detail | 淘汰：与 B/C 一起被评为「乱」 |
+| B「行动工作台」 | 任务/状态队列 | 淘汰 |
+| C「来源地图」 | 来源树双栏 | 淘汰 |
+| D「单列表」 | Skill 条目 + 分组 bands | 淘汰：条目粒度与更新单位不一致；分组过早暴露筛选决策 |
+| E「平铺按仓库」 | 仓库行 + Disclosure 展开 | 淘汰：展开/导航嵌套点击冲突；不如主从直接 |
+| **F「主从」** | 左目录（仓库 + 子 Skill + 无仓库 Skill 行）+ 右详情（含 SKILL.md 原文） | **validated verdict** |
 
-三个 variant 共用同一内存世界与 workflow 语义（更新确认、映射选择、Registry 受限恢复、审计详情），只比较信息架构与呈现。
+各 variant 共用同一内存世界与 workflow 语义（更新确认、映射选择、Registry 受限恢复、审计详情），差异在信息架构与呈现。
 
 ## 场景（顶部紫色条切换；切换会重置内存世界）
 
