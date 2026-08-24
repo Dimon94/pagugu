@@ -115,7 +115,6 @@ _Avoid_: 记录派生状态变化或原始命令输出；可改写历史。
 
 ## 仍为 Unknown
 
-- Skill 呈现层状态聚合与详情字段的最终公开合同（Git 层 Checkout Git State 枚举已由 Dimon94/pagugu#5 冻结）。
 - 托管插件来源的首批支持范围。
 - 签名、公证与 GitHub Releases 发布流程。
 - 专业商标可用性。
