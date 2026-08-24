@@ -124,12 +124,14 @@ enum PrototypeVariant: String, CaseIterable {
     case a = "A"
     case b = "B"
     case c = "C"
+    case d = "D"
 
     var title: String {
         switch self {
         case .a: return "Skill 目录（列表 + 详情）"
         case .b: return "行动工作台（待办队列）"
         case .c: return "来源地图（来源 → Skill → 安装）"
+        case .d: return "单列表（极简）"
         }
     }
 }
