@@ -394,7 +394,9 @@ final class PrototypeWorld {
 
     var checkRun: StubCheckRun?
     var update: StubUpdateFlow?
-    var notice: String?
+    /// 操作结果反馈（产品侧横幅呈现，瞬时、可关闭）；warning=true 用警示样式。
+    private(set) var notice: String?
+    private(set) var noticeIsWarning = false
 
     /// 待映射的 Unattributed 条目 id；非 nil 时由 Root 弹出映射选择。
     var mappingDraftID: String?
@@ -405,6 +407,16 @@ final class PrototypeWorld {
 
     init() {
         load(.dailyLoop)
+    }
+
+    private func note(_ text: String, warning: Bool = false) {
+        notice = text
+        noticeIsWarning = warning
+    }
+
+    func dismissNotice() {
+        notice = nil
+        noticeIsWarning = false
     }
 
     // MARK: 查询
@@ -451,7 +463,7 @@ final class PrototypeWorld {
         registryMode = .normal
         simulateRegistryWriteFailure = false
         scanIsPartial = false
-        checkRun = nil; update = nil; notice = nil; mappingDraftID = nil
+        checkRun = nil; update = nil; notice = nil; noticeIsWarning = false; mappingDraftID = nil
         updateRigs = [:]; checkFailRigs = []; checkReveal = [:]
 
         switch newScenario {
@@ -485,7 +497,7 @@ final class PrototypeWorld {
                              invalidMappingReason: nil, invalidMappingTargetName: nil),
         ]
         audit = []
-        notice = "已自动发现三个 Personal Skill Root（\(Self.personalRootsNote)），无需理解目录结构。"
+        note("已自动发现三个 Personal Skill Root（\(Self.personalRootsNote)），无需理解目录结构。")
     }
 
     private func loadDailyLoop() {
@@ -582,7 +594,7 @@ final class PrototypeWorld {
         audit.insert(auditRecord("au-m1", kind: .mapping, hoursAgo: 3, subject: "~/.claude/skills/weekly-report",
                                  outcome: "created", outcomeDisplay: "已建立",
                                  detail: "映射到 report-skill 的 skills/weekly-report（现已失效）"), at: 0)
-        notice = "weekly-report 的映射已失效：来源目录被移动。映射记录保留，来源移回后自动复活。"
+        note("weekly-report 的映射已失效：来源目录被移动。映射记录保留，来源移回后自动复活。")
     }
 
     private func loadCheckFailure() {
@@ -593,7 +605,7 @@ final class PrototypeWorld {
         audit = [auditRecord("au-c1", kind: .checkRun, hoursAgo: 20, subject: "全量检查（7 个检出）",
                              outcome: "partial", outcomeDisplay: "部分完成",
                              detail: "应检查 5 · 成功 4 · 失败 1 · 本地可判跳过 2")]
-        notice = "本场景中 helper (org-a) 的远程将无法连接，用于演示部分失败。"
+        note("本场景中 helper (org-a) 的远程将无法连接，用于演示部分失败。")
     }
 
     private func loadUpdateRecovery() {
@@ -643,7 +655,7 @@ final class PrototypeWorld {
             inst("in-docx2", path: "~/.codex/skills/docx", host: .codex, projection: .symlink),
         ]))
         updateRigs["sk-docx2"] = .noopNowUpToDate
-        notice = "每个可更新 Skill 的更新结果已预设为不同走向，逐个尝试即可看全成功、noop、取消与失败恢复。"
+        note("每个可更新 Skill 的更新结果已预设为不同走向，逐个尝试即可看全成功、noop、取消与失败恢复。")
     }
 
     private func loadRegistryFaults() {
@@ -668,7 +680,7 @@ final class PrototypeWorld {
             auditRecord("au-r5", kind: .checkRun, hoursAgo: 26, subject: "全量检查（7 个检出）",
                         outcome: "complete", outcomeDisplay: "全部完成", detail: "应检查 5 · 成功 5 · 本地可判跳过 2"),
         ]
-        notice = "用顶部「模拟」菜单制造 Registry 损坏 / 未来版本 / 写失败；下方「最近活动」含一条孤儿更新记录。"
+        note("用顶部「模拟」菜单制造 Registry 损坏 / 未来版本 / 写失败；下方「最近活动」含一条孤儿更新记录。")
     }
 
     // MARK: 动作：扫描与 Scan Root
@@ -677,7 +689,7 @@ final class PrototypeWorld {
         guard registryMode == .normal else { return }
         if simulateRegistryWriteFailure { registryWriteFailed(); return }
         scanRoots.append(StubScanRoot(id: "sr-\(scanRoots.count)", path: path, isAvailable: true))
-        notice = "已保存 Project Scan Root \(path)。重新扫描后发现 1 个仅来源 Skill（wayfinder，无安装）。"
+        note("已保存 Project Scan Root \(path)。重新扫描后发现 1 个仅来源 Skill（wayfinder，无安装）。")
         if scenario == .firstLaunch, !skills.contains(where: { $0.id == "sk-wayfinder" }) {
             skills.append(skill("sk-wayfinder", name: "wayfinder", sourceID: "src-myskills",
                                 path: "skills/wayfinder", installations: []))
@@ -687,17 +699,17 @@ final class PrototypeWorld {
     func removeScanRoot(_ id: String) {
         if simulateRegistryWriteFailure { registryWriteFailed(); return }
         scanRoots.removeAll { $0.id == id }
-        notice = "已删除该 Scan Root 主张；其下映射与观察记录按合同保留，不级联删除。"
+        note("已删除该 Scan Root 主张；其下映射与观察记录按合同保留，不级联删除。")
     }
 
     func rescan() {
         scanIsPartial = false
-        notice = "已重新扫描（stub）：当前 Scan Result 完整。"
+        note("已重新扫描（stub）：当前 Scan Result 完整。")
     }
 
     func simulatePartialScan() {
         scanIsPartial = true
-        notice = "模拟：扫描结果不完整（部分目录不可读）。检查与更新入口已禁用，恢复动作是重新扫描或处理扫描问题。"
+        note("模拟：扫描结果不完整（部分目录不可读）。检查与更新入口已禁用，恢复动作是重新扫描或处理扫描问题。", warning: true)
     }
 
     // MARK: 动作：Check Run
@@ -753,9 +765,11 @@ final class PrototypeWorld {
                                  subject: "全量检查（\(run.total + run.skipped) 个检出）",
                                  outcome: outcome, outcomeDisplay: outcomeDisplay,
                                  detail: "应检查 \(run.total) · 成功 \(run.finished - run.failed) · 失败 \(run.failed) · 本地可判跳过 \(run.skipped)"), at: 0)
-        notice = outcome == "complete"
-            ? "检查完成：全部成功。"
-            : "检查\(outcomeDisplay)：失败项已回到「尚未检查」并随下次全量检查自然重试。"
+        if outcome == "complete" {
+            note("检查完成：全部成功。")
+        } else {
+            note("检查\(outcomeDisplay)：失败项已回到「尚未检查」并随下次全量检查自然重试。", warning: true)
+        }
         checkRun = nil
     }
 
@@ -780,13 +794,13 @@ final class PrototypeWorld {
         switch rig {
         case .noopNowUpToDate:
             update = nil
-            notice = "「\(skill.name)」已是最新：重查发现远程没有新提交（noop，未做任何修改）。"
+            note("「\(skill.name)」已是最新：重查发现远程没有新提交（noop，未做任何修改）。")
             audit.insert(auditRecord("au-\(UUID().uuidString.prefix(6))", kind: .updateRun, hoursAgo: 0,
                                      subject: skill.name, outcome: "success", outcomeDisplay: "成功（noop：已是最新）",
                                      detail: "重查时远程无新提交，未执行任何修改。"), at: 0)
         case .recheckBlocked(let state):
             update = nil
-            notice = "「\(skill.name)」现在不可更新：\(state.displayName)。\(state.recovery ?? "")"
+            note("「\(skill.name)」现在不可更新：\(state.displayName)。\(state.recovery ?? "")", warning: true)
         case .success, .failAfterConfirm, .successThenRefreshFailed:
             guard let source = source(for: skill) else { update = nil; return }
             let selected = eligible[0]
@@ -835,7 +849,7 @@ final class PrototypeWorld {
                                  detail: "确认前取消；该检出回到「尚未检查」，恢复动作是重新检查。",
                                  planSnapshot: "计划：\(plan.checkoutPath) 从 \(plan.headSHA) fast-forward 到 \(plan.targetSHA)（当时记录）"), at: 0)
         update = nil
-        notice = "已取消。未做任何修改；该检出回到「尚未检查」，重新检查即可恢复。"
+        note("已取消。未做任何修改；该检出回到「尚未检查」，重新检查即可恢复。")
     }
 
     func confirmUpdate() {
@@ -876,9 +890,9 @@ final class PrototypeWorld {
                                      detail: "fast-forward 到 \(plan.targetSHA)（落后 \(plan.behind) 个提交）；已重读 Git 事实并触发完整扫描刷新。"), at: 0)
             update = nil
             if case .successThenRefreshFailed = rig {
-                notice = "「\(skillName)」更新成功。但刷新列表的扫描失败了：列表可能不是最新；更新结果不受影响，也不会被回滚。"
+                note("「\(skillName)」更新成功。但刷新列表的扫描失败了：列表可能不是最新；更新结果不受影响，也不会被回滚。", warning: true)
             } else {
-                notice = "「\(skillName)」已更新到 \(plan.targetSHA)，现在是最新。"
+                note("「\(skillName)」已更新到 \(plan.targetSHA)，现在是最新。")
             }
         }
     }
@@ -910,7 +924,7 @@ final class PrototypeWorld {
                                  subject: ua.asFoundPath, outcome: "created", outcomeDisplay: "已建立",
                                  detail: "映射到 \(source(for: skill)?.displayName ?? "") 的 \(skill.relativePath)；每次完整扫描都会重验证。"), at: 0)
         mappingDraftID = nil
-        notice = "已建立映射：\(ua.asFoundPath) → \(skill.name)。这是人工主张，事实变化时会自动失效或复活。"
+        note("已建立映射：\(ua.asFoundPath) → \(skill.name)。这是人工主张，事实变化时会自动失效或复活。")
     }
 
     func cancelMappingDraft() {
@@ -928,13 +942,13 @@ final class PrototypeWorld {
                                  subject: unattributed.first { $0.id == unattributedID }?.asFoundPath ?? unattributedID,
                                  outcome: "deleted", outcomeDisplay: "已删除",
                                  detail: "删除失效映射记录；未触碰任何 Skill 内容。"), at: 0)
-        notice = "已删除失效映射记录。该安装仍是「来源不明」，可随时重新指定来源。"
+        note("已删除失效映射记录。该安装仍是「来源不明」，可随时重新指定来源。")
     }
 
     /// 场景助手（mapping）：模拟来源目录移回 + 重新扫描 → 失效映射自动复活。
     func simulateMappingRevive() {
         guard let ua = unattributed.first(where: { $0.invalidMappingReason != nil }) else {
-            notice = "当前没有失效映射。"
+            note("当前没有失效映射。")
             return
         }
         // 来源重新被发现：注册一个新来源与 Skill，映射自动复活。
@@ -952,7 +966,7 @@ final class PrototypeWorld {
         if let idx = skills.firstIndex(where: { $0.id == "sk-weekly-report" }) {
             skills[idx].installations.append(revived)
         }
-        notice = "来源目录移回后重新扫描：weekly-report 的映射已自动复活（无需人工确认）。"
+        note("来源目录移回后重新扫描：weekly-report 的映射已自动复活（无需人工确认）。")
     }
 
     // MARK: 动作：Registry 故障与审计
@@ -983,22 +997,22 @@ final class PrototypeWorld {
                 }
             }
         }
-        notice = "已重置为空 Registry（原文件已备份到 registry.corrupt-20260823-1730.json）。Scan Root 与映射需人工重建；观察证据可经重新检查恢复。"
+        note("已重置为空 Registry（原文件已备份到 registry.corrupt-20260823-1730.json）。Scan Root 与映射需人工重建；观察证据可经重新检查恢复。")
     }
 
     func simulateQuitForManualRepair() {
-        notice = "真实产品中此动作会退出 App，由你在终端修复 quarantine 文件后放回原路径。原型不退出。"
+        note("真实产品中此动作会退出 App，由你在终端修复 quarantine 文件后放回原路径。原型不退出。")
     }
 
     func clearAudit() {
         audit = []
-        notice = "已清空历史记录（无墓碑）。Registry、Skill 与 Git 均未受影响。"
+        note("已清空历史记录（无墓碑）。Registry、Skill 与 Git 均未受影响。")
     }
 
     // MARK: - 私有 helper
 
     private func registryWriteFailed() {
-        notice = "写入失败：动作未生效，磁盘上的 Registry 保持原样（fail closed）。请检查磁盘空间与目录权限后重试。"
+        note("写入失败：动作未生效，磁盘上的 Registry 保持原样（fail closed）。请检查磁盘空间与目录权限后重试。", warning: true)
     }
 
     private func setState(_ checkoutID: String, _ state: StubCheckoutState) {

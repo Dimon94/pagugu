@@ -14,6 +14,8 @@ struct PrototypeRootView: View {
         VStack(spacing: 0) {
             PrototypeScenarioBar(world: world)
             Divider()
+            // 产品侧结果反馈横幅（B4）：所有操作结果的家，瞬时、可关闭。
+            StubNoticeBanner(world: world)
             Group {
                 if world.registryMode != .normal {
                     StubRegistryRecoveryView(world: world)

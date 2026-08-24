@@ -216,9 +216,10 @@ struct PrototypeVariantFView: View {
                     hostSlots(activeHosts(of: source))
                     Spacer()
                     if !eligible.isEmpty, let skill = skills.first {
-                        Button("更新") { world.startUpdate(skillID: skill.id) }
+                        Button("更新…") { world.startUpdate(skillID: skill.id) }
                             .buttonStyle(.borderedProminent)
-                            .disabled(world.hasRunningWork || world.scanIsPartial)
+                            .disabled(stubActionDisabledReason(world) != nil)
+                            .help(stubActionDisabledReason(world) ?? "重查并确认精确计划后执行；一次只更新一个工作树")
                     }
                 }
                 Text(phrase(of: source))
@@ -296,9 +297,18 @@ struct PrototypeVariantFView: View {
     @ToolbarContentBuilder
     private var detailToolbar: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
-            Button("检查更新") { world.startCheckRun() }
-                .buttonStyle(.borderedProminent)
-                .disabled(!world.canStartCheckRun)
+            if let run = world.checkRun, run.isRunning {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("检查中 \(run.finished)/\(run.total)")
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Button("检查更新") { world.startCheckRun() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!world.canStartCheckRun)
+                    .help(stubActionDisabledReason(world) ?? "全量检查全部应检查检出；run 中互斥")
+            }
         }
         ToolbarItem(placement: .status) {
             if let last = world.lastObservationTime {
@@ -307,10 +317,14 @@ struct PrototypeVariantFView: View {
             }
         }
         ToolbarItem(placement: .automatic) {
-            Button { showActivity = true } label: { Label("最近活动", systemImage: "clock") }
+            Button { showActivity = true } label: {
+                Label("最近活动", systemImage: "clock").labelStyle(.titleAndIcon)
+            }
         }
         ToolbarItem(placement: .automatic) {
-            Button { showScanRoots = true } label: { Label("扫描范围", systemImage: "folder") }
+            Button { showScanRoots = true } label: {
+                Label("扫描范围", systemImage: "folder").labelStyle(.titleAndIcon)
+            }
         }
     }
 

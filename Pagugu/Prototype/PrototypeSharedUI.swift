@@ -6,6 +6,45 @@
 import SwiftUI
 import AppKit
 
+// MARK: - 操作禁用原因（C6：统一解释为什么按钮不可用）
+
+@MainActor
+func stubActionDisabledReason(_ world: PrototypeWorld) -> String? {
+    if world.registryMode != .normal { return "Registry 处于受限恢复模式，先完成恢复" }
+    if world.scanIsPartial { return "扫描结果不完整：重新扫描后才能操作" }
+    if world.checkRun?.isRunning == true { return "检查进行中，完成后即可操作" }
+    if world.update != nil { return "有更新流程进行中" }
+    return nil
+}
+
+// MARK: - 产品侧结果反馈横幅（B4：瞬时、可关闭；所有操作结果的家）
+
+struct StubNoticeBanner: View {
+    let world: PrototypeWorld
+
+    var body: some View {
+        if let notice = world.notice {
+            HStack(spacing: 8) {
+                Image(systemName: world.noticeIsWarning ? "exclamationmark.triangle.fill" : "info.circle.fill")
+                    .foregroundStyle(world.noticeIsWarning ? .orange : .blue)
+                Text(notice)
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button { world.dismissNotice() } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("关闭")
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background((world.noticeIsWarning ? Color.orange : Color.blue).opacity(0.08))
+        }
+    }
+}
+
 // MARK: - Prototype chrome：场景条（顶部，视觉上明确是原型工具而非产品设计）
 
 struct PrototypeScenarioBar: View {
@@ -298,12 +337,11 @@ struct StubCheckoutCard: View {
 
             if checkout.state == .updateAvailable {
                 HStack {
-                    Button("更新到 \(checkout.tipSHA)（落后 \(checkout.behind) 个提交）") {
-                        world.startUpdate(skillID: skill.id)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(world.hasRunningWork || world.scanIsPartial || world.registryMode != .normal)
-                    Text("只 fast-forward 这个工作树；不动其他检出与任何安装目录。")
+                    Button("更新…") { world.startUpdate(skillID: skill.id) }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(stubActionDisabledReason(world) != nil)
+                        .help(stubActionDisabledReason(world) ?? "重查并确认精确计划后，fast-forward 到远程最新提交")
+                    Text("落后 \(checkout.behind) 个提交 · 仅 fast-forward 此工作树；不动其他检出与任何安装目录。")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
@@ -404,7 +442,7 @@ struct StubUpdateSheet: View {
                         .font(.caption).foregroundStyle(.secondary)
                     HStack {
                         Spacer()
-                        Button("知道了") { world.dismissUpdateFailure() }
+                        Button("关闭") { world.dismissUpdateFailure() }
                             .keyboardShortcut(.defaultAction)
                     }
                 }
@@ -452,7 +490,7 @@ struct StubConfirmView: View {
             HStack {
                 Button("取消") { world.cancelUpdate() }
                 Spacer()
-                Button("确认更新到 \(plan.targetSHA)") { world.confirmUpdate() }
+                Button("确认更新") { world.confirmUpdate() }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
             }
@@ -467,28 +505,53 @@ struct StubConfirmView: View {
     }
 }
 
-// MARK: - 来源映射 sheet
+// MARK: - 来源映射 sheet（E9：可筛选、按来源分组、无目标时的引导）
 
 struct StubMappingSheet: View {
     let world: PrototypeWorld
     @State private var selectedSkillID: String?
+    @State private var filter = ""
 
     var body: some View {
         if let uaID = world.mappingDraftID,
            let ua = world.unattributed.first(where: { $0.id == uaID }) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("指定来源").font(.title3.weight(.semibold))
-                Text("\(ua.asFoundPath) 是一份复制安装，无法自动确认来源。请选择它对应的 Skill（只能选择当前已发现的 Skill）：")
+                Text("\(ua.asFoundPath) 是一份复制安装，无法自动确认来源。选择它对应的 Skill（只能选择当前已发现的 Skill）：")
                     .font(.callout)
 
-                Picker("Skill", selection: $selectedSkillID) {
-                    Text("请选择…").tag(String?.none)
-                    ForEach(world.skills) { skill in
-                        Text("\(skill.name) — \(world.source(for: skill)?.displayName ?? "")")
-                            .tag(String?.some(skill.id))
+                if world.skills.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("当前没有已发现的 Skill 可以映射。").font(.callout.weight(.medium))
+                        Text("先把包含来源仓库的目录加入 Project Scan Root，来源被发现后再回来建立映射。")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                } else {
+                    TextField("筛选 Skill 或来源", text: $filter)
+                        .textFieldStyle(.roundedBorder)
+                    List(selection: $selectedSkillID) {
+                        ForEach(world.sources) { source in
+                            let skills = filteredSkills(of: source)
+                            if !skills.isEmpty {
+                                Section(source.displayName) {
+                                    ForEach(skills) { skill in
+                                        HStack {
+                                            Text(skill.name)
+                                            Spacer()
+                                            Text(skill.relativePath)
+                                                .font(.caption).foregroundStyle(.secondary)
+                                        }
+                                        .tag(skill.id)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .frame(minHeight: 200, maxHeight: 280)
                 }
-                .labelsHidden()
 
                 if let target = selectedSkillID,
                    let skill = world.skills.first(where: { $0.id == target }),
@@ -511,15 +574,25 @@ struct StubMappingSheet: View {
                     .keyboardShortcut(.defaultAction)
                 }
             }
-            .padding(24).frame(width: 520)
+            .padding(24).frame(width: 540)
+        }
+    }
+
+    private func filteredSkills(of source: StubSkillSource) -> [StubSkill] {
+        world.skills.filter { skill in
+            skill.sourceID == source.id
+                && (filter.isEmpty
+                    || skill.name.localizedCaseInsensitiveContains(filter)
+                    || source.displayName.localizedCaseInsensitiveContains(filter))
         }
     }
 }
 
-/// 来源不明条目卡片（各 variant 共用）。
+/// 来源不明条目卡片（各 variant 共用）。E10：主动作突出，删除失效映射降为次要并带确认。
 struct StubUnattributedCard: View {
     let world: PrototypeWorld
     let item: StubUnattributed
+    @State private var confirmDeleteMapping = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -537,22 +610,31 @@ struct StubUnattributedCard: View {
             Text("复制安装，无法自动确认来源；不参与去重，不可更新。")
                 .font(.caption).foregroundStyle(.secondary)
             if let reason = item.invalidMappingReason {
-                Label("此前的映射已失效：\(reason)。记录保留，来源恢复后自动复活；也可显式删除。",
+                Label("此前的映射已失效：\(reason)。记录保留，来源恢复后自动复活。",
                       systemImage: "link.badge.plus")
                     .font(.caption).foregroundStyle(.orange)
             }
             HStack(spacing: 12) {
                 Button("指定来源…") { world.beginMapping(item.id) }
+                    .buttonStyle(.borderedProminent)
                     .disabled(world.registryMode != .normal)
+                Spacer()
                 if item.invalidMappingReason != nil {
-                    Button("删除失效映射记录") { world.deleteInvalidMapping(item.id) }
-                        .foregroundStyle(.red)
+                    Button("删除失效映射记录") { confirmDeleteMapping = true }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
         .padding(10)
         .background(.background, in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+        .confirmationDialog("删除这条失效映射记录？", isPresented: $confirmDeleteMapping, titleVisibility: .visible) {
+            Button("删除记录", role: .destructive) { world.deleteInvalidMapping(item.id) }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("只删除 Pagugu 里的映射记录；不触碰磁盘上的任何 Skill 内容。该安装仍是「来源不明」。")
+        }
     }
 }
 
@@ -716,6 +798,7 @@ struct StubScanRootSection: View {
                             .font(.caption)
                     }
                 }
+                // D8 实现注记：真实实现使用 NSOpenPanel 让用户选择目录（原型用两个假路径代替）。
                 Menu("添加 Project Scan Root…") {
                     Button("~/Code（示例）") { world.addScanRoot("~/Code") }
                     Button("~/Work（示例）") { world.addScanRoot("~/Work") }
