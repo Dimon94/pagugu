@@ -63,10 +63,11 @@ enum StubCheckoutState: String, CaseIterable, Identifiable {
     }
 
     /// 可扫读分组：把 12 态收敛为 4 组（呈现层分组，合同状态不变）。
+    /// no-remote 归 settled：本地仓库未推送是常态开局，不是故障（ADR-0001 §2 同一哲学）。
     var group: StubStateGroup {
         switch self {
         case .updateAvailable: return .updateReady
-        case .upToDate, .aheadOnly: return .settled
+        case .upToDate, .aheadOnly, .noRemote: return .settled
         case .checkUnknown: return .unknown
         default: return .needsAttention
         }
@@ -93,11 +94,11 @@ enum StubStateGroup: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    /// 展示顺序：可更新优先，然后是需要处理的，尚未检查，最后无需更新。
+    /// 展示顺序：需要处理优先，然后是可更新的，尚未检查，最后无需更新（IA 定稿 D6）。
     var sortOrder: Int {
         switch self {
-        case .updateReady: return 0
-        case .needsAttention: return 1
+        case .needsAttention: return 0
+        case .updateReady: return 1
         case .unknown: return 2
         case .settled: return 3
         }
@@ -184,6 +185,37 @@ struct StubUnattributed: Identifiable {
     /// 失效映射呈现：非 nil 表示这里曾有一条人工映射，因该原因失效（记录保留，可显式删除）。
     var invalidMappingReason: String?
     var invalidMappingTargetName: String?
+
+    /// 复制安装自身的 SKILL.md 原文（stub）：帮助用户在建立映射前确认它是什么。
+    var markdownDocument: String {
+        StubMarkdown.document(name: displayName, sourcePath: asFoundPath)
+    }
+}
+
+/// 原型用的 SKILL.md 样例生成器（真实实现从磁盘读取）。
+enum StubMarkdown {
+    static func document(name: String, sourcePath: String) -> String {
+        """
+        ---
+        name: \(name)
+        description: \(name) 的示例描述（原型 stub 内容，非真实文件）
+        ---
+
+        # \(name)
+
+        ## 何时使用
+
+        当用户请求与 \(name) 相关的任务时使用本 Skill。
+
+        ## 指令
+
+        1. 读取用户输入，确认任务范围。
+        2. 执行 \(name) 的核心流程。
+        3. 输出结构化结果并报告剩余风险。
+
+        > 路径：\(sourcePath)
+        """
+    }
 }
 
 // MARK: - 检出 / 来源 / Skill
@@ -220,6 +252,11 @@ struct StubSkill: Identifiable {
     var sourceID: String
     var relativePath: String   // 仓内相对路径
     var installations: [StubInstallation]
+
+    /// SKILL.md 原文（stub 内容；真实实现从磁盘读取，只读展示）。
+    var markdownDocument: String {
+        StubMarkdown.document(name: name, sourcePath: relativePath)
+    }
 }
 
 // MARK: - 审计记录（呈现取向的 stub；语义见 ADR-0007）
@@ -272,6 +309,8 @@ struct StubUpdatePlan {
     var headSHA: String
     var targetSHA: String
     var behind: Int
+    /// 爆炸半径声明：同一仓库内将随本次 fast-forward 一起前进的全部 Skill 名。
+    var siblingSkillNames: [String]
 }
 
 enum StubUpdatePhase {
@@ -762,7 +801,8 @@ final class PrototypeWorld {
                 upstream: selected.upstream,
                 headSHA: selected.headSHA,
                 targetSHA: selected.tipSHA,
-                behind: selected.behind
+                behind: selected.behind,
+                siblingSkillNames: skills.filter { $0.sourceID == source.id }.map(\.name)
             )
             update = StubUpdateFlow(skillID: skill.id, phase: .confirming(plan))
         }

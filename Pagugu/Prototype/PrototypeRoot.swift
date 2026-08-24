@@ -8,7 +8,7 @@ import SwiftUI
 @MainActor
 struct PrototypeRootView: View {
     @State private var world = PrototypeWorld()
-    @State private var variant: PrototypeVariant = .d
+    @State private var variant: PrototypeVariant = .f
 
     var body: some View {
         VStack(spacing: 0) {
@@ -23,6 +23,8 @@ struct PrototypeRootView: View {
                     case .b: PrototypeVariantBView(world: world)
                     case .c: PrototypeVariantCView(world: world)
                     case .d: PrototypeVariantDView(world: world)
+                    case .e: PrototypeVariantEView(world: world)
+                    case .f: PrototypeVariantFView(world: world)
                     }
                 }
             }

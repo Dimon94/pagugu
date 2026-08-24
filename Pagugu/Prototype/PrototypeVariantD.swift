@@ -227,7 +227,7 @@ struct PrototypeVariantDView: View {
 }
 
 /// Skill 详情：平铺分区，不套卡片盒。状态与检出 → 安装位置 → 来源 → 相关记录。
-private struct SkillDetailView: View {
+struct SkillDetailView: View {
     let world: PrototypeWorld
     let skill: StubSkill
     @State private var detailRecord: StubAuditRecord?
@@ -281,6 +281,10 @@ private struct SkillDetailView: View {
                             Text("仓内路径 \(skill.relativePath) · Skill 身份 = 来源 + 仓内路径，名称只是展示。")
                                 .font(.caption2).foregroundStyle(.secondary)
                         }
+                    }
+
+                    section("SKILL.md 原文（只读）") {
+                        MarkdownSourceView(text: skill.markdownDocument)
                     }
 
                     let related = world.audit.filter { $0.subject.contains(skill.name) }

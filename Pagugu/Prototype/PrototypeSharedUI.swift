@@ -125,6 +125,8 @@ enum PrototypeVariant: String, CaseIterable {
     case b = "B"
     case c = "C"
     case d = "D"
+    case e = "E"
+    case f = "F"
 
     var title: String {
         switch self {
@@ -132,6 +134,8 @@ enum PrototypeVariant: String, CaseIterable {
         case .b: return "行动工作台（待办队列）"
         case .c: return "来源地图（来源 → Skill → 安装）"
         case .d: return "单列表（极简）"
+        case .e: return "平铺清单（按仓库）"
+        case .f: return "主从（目录 + 详情 + 原文）"
         }
     }
 }
@@ -167,6 +171,95 @@ struct HostBadge: View {
             .font(.caption2)
             .padding(.horizontal, 5).padding(.vertical, 1)
             .background(.quaternary, in: RoundedRectangle(cornerRadius: 3))
+    }
+}
+
+// MARK: - SKILL.md 原文显示（只读、可选中复制）
+
+struct MarkdownSourceView: View {
+    let text: String
+
+    var body: some View {
+        ScrollView {
+            Text(text)
+                .font(.system(.callout, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+        }
+        .frame(minHeight: 120, maxHeight: 280)
+        .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+// MARK: - Agent Host logo 槽位（前期只实现 Claude 与 Codex；图形为原型手绘占位，真实 logo 资源归实现期）
+
+struct StubHostLogo: View {
+    let host: StubHost
+    let isActive: Bool
+    var size: CGFloat = 15
+
+    var body: some View {
+        Group {
+            switch host {
+            case .claude:
+                ClaudeSparkShape().fill(tint)
+            case .codex:
+                CodexKnotShape().stroke(tint, style: StrokeStyle(lineWidth: size * 0.11, lineCap: .round))
+            }
+        }
+        .frame(width: size, height: size)
+        .help(host.rawValue + (isActive ? "：已安装" : "：未安装"))
+    }
+
+    private var tint: Color {
+        isActive ? activeTint : Color.secondary.opacity(0.35)
+    }
+
+    private var activeTint: Color {
+        switch host {
+        case .claude: return Color(red: 0.85, green: 0.47, blue: 0.34)
+        case .codex: return Color.primary
+        }
+    }
+}
+
+/// Claude 星芒的占位近似（八角星）。
+struct ClaudeSparkShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let outer = min(rect.width, rect.height) / 2
+        let inner = outer * 0.36
+        var path = Path()
+        let spikes = 8
+        for index in 0..<(spikes * 2) {
+            let angle = Angle(degrees: Double(index) * 180.0 / Double(spikes) - 90).radians
+            let radius = index.isMultiple(of: 2) ? outer : inner
+            let point = CGPoint(x: center.x + CGFloat(cos(angle)) * radius,
+                                y: center.y + CGFloat(sin(angle)) * radius)
+            if index == 0 { path.move(to: point) } else { path.addLine(to: point) }
+        }
+        path.closeSubpath()
+        return path
+    }
+}
+
+/// Codex（OpenAI 结）的占位近似：六个旋转花瓣轮廓。
+struct CodexKnotShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let radius = min(rect.width, rect.height) / 2
+        var path = Path()
+        for index in 0..<6 {
+            let angle = CGFloat(index) * .pi / 3
+            let petal = CGRect(x: center.x - radius * 0.34, y: center.y - radius,
+                               width: radius * 0.68, height: radius)
+            var transform = CGAffineTransform(translationX: center.x, y: center.y)
+            transform = transform.rotated(by: angle)
+            transform = transform.translatedBy(x: -center.x, y: -center.y)
+            path.addEllipse(in: petal.applying(transform))
+        }
+        return path
     }
 }
 
@@ -351,6 +444,10 @@ struct StubConfirmView: View {
 
             Text("影响范围：仅把上面这个工作树 fast-forward 到目标提交；不动其他检出，不写任何安装目录。确认前已按最新事实重查。")
                 .font(.caption).foregroundStyle(.secondary)
+            if plan.siblingSkillNames.count > 1 {
+                Text("同一仓库的 \(plan.siblingSkillNames.count) 个 Skill 将随本次更新一起前进：\(plan.siblingSkillNames.joined(separator: "、"))。")
+                    .font(.caption).foregroundStyle(.blue)
+            }
 
             HStack {
                 Button("取消") { world.cancelUpdate() }
