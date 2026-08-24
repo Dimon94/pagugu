@@ -18,25 +18,34 @@ struct PrototypeVariantFView: View {
         case unattributed(String)
     }
 
+    /// 收起的仓库 id 集合；默认全部展开，点行首 chevron 收起/展开。
+    @State private var collapsedSourceIDs: Set<String> = []
+
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
-                if world.scanRoots.isEmpty {
-                    firstLaunchBlock
-                }
-                if let run = world.checkRun, run.isRunning {
-                    Label("正在检查 \(run.finished)/\(run.total)…", systemImage: "arrow.triangle.2.circlepath")
-                        .font(.callout).foregroundStyle(.blue)
-                }
-                ForEach(flatNodes, id: \.self) { node in
+                ForEach(visibleNodes, id: \.self) { node in
                     sidebarRow(node)
                 }
             }
             .listStyle(.plain)
             .navigationSplitViewColumnWidth(min: 260, ideal: 310, max: 420)
         } detail: {
-            detailView
-                .toolbar { detailToolbar }
+            VStack(spacing: 0) {
+                if let run = world.checkRun, run.isRunning {
+                    Label("正在检查 \(run.finished)/\(run.total)…", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.callout).foregroundStyle(.blue)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .background(.blue.opacity(0.08))
+                }
+                if world.scanRoots.isEmpty && selection == nil {
+                    welcomeView
+                } else {
+                    detailView
+                }
+            }
+            .toolbar { detailToolbar }
         }
         .sheet(isPresented: $showActivity) {
             VStack(alignment: .leading) { StubAuditSection(world: world) }
@@ -47,30 +56,39 @@ struct PrototypeVariantFView: View {
                 .padding(16).frame(width: 520)
         }
         .onAppear {
-            if selection == nil { selection = flatNodes.first }
+            if selection == nil, !world.scanRoots.isEmpty { selection = firstNode }
         }
         .onChange(of: world.scenario) {
-            selection = flatNodes.first
+            selection = world.scanRoots.isEmpty ? nil : firstNode
         }
     }
 
-    private var firstLaunchBlock: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("欢迎使用 Pagugu").font(.headline)
-            Text("三个个人 Skill 目录已自动发现。添加 Project Scan Root 后，项目里的来源仓库也会出现在目录里。")
-                .font(.caption).foregroundStyle(.secondary)
+    /// 首次启动引导：空 Registry 正常态，呈现在右侧详情区。
+    private var welcomeView: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "shippingbox")
+                .font(.system(size: 40))
+                .foregroundStyle(.secondary)
+            Text("欢迎使用 Pagugu").font(.title2.weight(.semibold))
+            Text("三个个人 Skill 目录已自动发现，左侧已列出其中的 Skill。\n添加 Project Scan Root 后，项目里的来源仓库也会出现在目录里。")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
             Menu("添加 Project Scan Root…") {
                 Button("~/Code（示例）") { world.addScanRoot("~/Code") }
                 Button("~/Work（示例）") { world.addScanRoot("~/Work") }
             }
-            .font(.callout)
+            .buttonStyle(.borderedProminent)
         }
-        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: 目录顺序：静默按行动优先级；仓库行后紧跟其 Skill 行
+    // MARK: 目录顺序：静默按行动优先级；仓库行可收起/展开（默认展开）
 
-    private var flatNodes: [Node] {
+    private var firstNode: Node? {
+        visibleNodes.first
+    }
+
+    private var visibleNodes: [Node] {
         var rows: [(node: Node, order: Int, name: String)] = world.sources.map { source in
             (.repo(source.id), worstGroup(of: source).sortOrder, source.displayName)
         }
@@ -83,11 +101,19 @@ struct PrototypeVariantFView: View {
         var nodes: [Node] = []
         for entry in ordered {
             nodes.append(entry.node)
-            if case .repo(let id) = entry.node {
+            if case .repo(let id) = entry.node, !collapsedSourceIDs.contains(id) {
                 nodes.append(contentsOf: world.skills.filter { $0.sourceID == id }.map { Node.skill($0.id) })
             }
         }
         return nodes
+    }
+
+    private func toggleCollapse(_ sourceID: String) {
+        if collapsedSourceIDs.contains(sourceID) {
+            collapsedSourceIDs.remove(sourceID)
+        } else {
+            collapsedSourceIDs.insert(sourceID)
+        }
     }
 
     private func worstGroup(of source: StubSkillSource) -> StubStateGroup {
@@ -105,7 +131,16 @@ struct PrototypeVariantFView: View {
         case .repo(let id):
             if let source = world.sources.first(where: { $0.id == id }) {
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 6) {
+                        Button { toggleCollapse(id) } label: {
+                            Image(systemName: collapsedSourceIDs.contains(id) ? "chevron.right" : "chevron.down")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 12)
+                        }
+                        .buttonStyle(.plain)
+                        .opacity(world.skills.contains { $0.sourceID == id } ? 1 : 0)
+                        .disabled(!world.skills.contains { $0.sourceID == id })
                         stateIcon(of: source)
                         Text(source.displayName).font(.callout.weight(.medium))
                         Spacer()
@@ -114,7 +149,7 @@ struct PrototypeVariantFView: View {
                     Text(phrase(of: source))
                         .font(.caption)
                         .foregroundStyle(phraseColor(of: source))
-                        .padding(.leading, 24)
+                        .padding(.leading, 36)
                 }
                 .tag(Node.repo(id))
             }
@@ -126,7 +161,7 @@ struct PrototypeVariantFView: View {
                     Spacer()
                     hostSlots(activeHosts(of: skill))
                 }
-                .padding(.leading, 22)
+                .padding(.leading, 36)
                 .tag(Node.skill(id))
             }
         case .unattributed(let id):
