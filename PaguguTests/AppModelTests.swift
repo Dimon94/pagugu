@@ -433,4 +433,83 @@ final class AppModelTests: XCTestCase {
         XCTAssertFalse(model.registryReady)
         XCTAssertTrue(model.readModel.isEmpty)
     }
+
+    // MARK: - Git Fact 与逐检出卡片（#19）
+
+    @MainActor
+    func testTwoCheckoutsOfSameRemoteStaySeparateAndUnobservedIsCheckUnknown() async throws {
+        let repoA = tmp.appendingPathComponent("repo-a")
+        let repoB = tmp.appendingPathComponent("repo-b")
+        try makeWorkTree(at: repoA)
+        try makeWorkTree(at: repoB)
+        try writeSkill(at: repoA.appendingPathComponent("skills/helper"), name: "helper")
+        try writeSkill(at: repoB.appendingPathComponent("skills/helper"), name: "helper")
+        let remoteURL = "https://example.com/team/skills.git"
+        let facts = [
+            repoA.path: checkoutFacts(path: repoA.path, remoteURL: remoteURL),
+            repoB.path: checkoutFacts(
+                path: repoB.path,
+                remoteURL: remoteURL,
+                head: .detached(sha: "bbbb")
+            ),
+        ]
+        let model = AppModel(
+            personalRoots: [repoA.path, repoB.path],
+            persistence: Persistence(directoryURL: tmp.appendingPathComponent("data")),
+            gitInspector: FakeGitInspector(factsByPath: facts)
+        )
+
+        await model.start()
+
+        let source = try XCTUnwrap(model.readModel.sources.first)
+        XCTAssertEqual(model.readModel.sources.count, 1, "同一规范化 remote = 一个 Skill Source")
+        XCTAssertEqual(source.id, .remoteURL("example.com/team/skills"))
+        XCTAssertEqual(Set(source.checkouts.map(\.canonicalPath)), [repoA.path, repoB.path])
+        XCTAssertEqual(source.skills.count, 1, "同一 Skill Identity 不因多检出重复")
+        let cards = model.readModel.checkoutCards(for: source.id)
+        XCTAssertEqual(Set(cards.map(\.id)), [repoA.path, repoB.path])
+        XCTAssertEqual(cards.first { $0.id == repoA.path }?.state, .checkUnknown)
+        XCTAssertEqual(cards.first { $0.id == repoB.path }?.state, .detached)
+        XCTAssertEqual(cards.first { $0.id == repoA.path }?.facts.originRemoteURL, remoteURL)
+    }
+
+    private func checkoutFacts(
+        path: String,
+        remoteURL: String,
+        head: GitHead = .branch(name: "main", sha: "aaaa")
+    ) -> CheckoutGitFacts {
+        CheckoutGitFacts(
+            checkoutPath: path,
+            gitCommonDirectory: path + "/.git",
+            head: head,
+            originRemoteURL: remoteURL,
+            upstream: head.branchName.map {
+                GitUpstream(ref: "origin/\($0)", remoteName: "origin", remoteURL: remoteURL)
+            },
+            dirty: .clean,
+            relativePosition: .unknown,
+            worktrees: [GitWorktree(path: path, branch: head.branchName)],
+            siblingBranchConflict: false,
+            inspectionFailure: nil
+        )
+    }
+
+    private struct FakeGitInspector: GitInspecting {
+        let factsByPath: [String: CheckoutGitFacts]
+
+        func inspectCheckout(at checkoutPath: String, scope: GitInspectionScope) async -> CheckoutGitFacts {
+            factsByPath[checkoutPath] ?? CheckoutGitFacts(
+                checkoutPath: checkoutPath,
+                gitCommonDirectory: nil,
+                head: nil,
+                originRemoteURL: nil,
+                upstream: nil,
+                dirty: .clean,
+                relativePosition: .unknown,
+                worktrees: [],
+                siblingBranchConflict: false,
+                inspectionFailure: .notAWorkTree
+            )
+        }
+    }
 }

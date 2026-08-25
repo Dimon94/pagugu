@@ -6,8 +6,8 @@ import UniformTypeIdentifiers
 // POS: 主窗口内容（Variant F 主从结构，#16 落地目录 IA 与 Skill 详情三块）。
 //      左侧：平铺目录——来源仓库行（可收起/展开子 Skill 行，默认展开，chevron 独立热区）
 //      + 无仓库可归行（来源不明）；无分组标题、无筛选 UI。
-//      右侧：Skill 详情三块（安装位置、来源标识、SKILL.md 原文只读可选中）；
-//      空选择回欢迎引导。「状态与检出」「相关记录」「更新动作」块归后续票。
+//      右侧：Skill 详情四块（状态与检出、安装位置、来源标识、SKILL.md 原文只读可选中）；
+//      空选择回欢迎引导。「相关记录」「更新动作」块归后续票。
 //      工具栏管理 Project Scan Root；Registry 故障由全窗口门面接管。
 //      View 只消费 Skill Read Model、只发 AppModel intent，不做 IO。
 // TEST: repo://PaguguTests/AppModelTests.swift（AppModel 正常/阻断投影与 intent 路由 smoke）。
@@ -113,6 +113,7 @@ struct ContentView: View {
             if let entry = model.readModel.skillEntry(for: identity) {
                 SkillDetailPanel(
                     entry: entry,
+                    checkouts: model.readModel.checkoutCards(for: entry.id.sourceKey),
                     markdown: model.skillMarkdown(canonicalPath: entry.canonicalPath)
                 )
             } else {
@@ -501,10 +502,11 @@ private struct SkillSourcePanel: View {
     }
 }
 
-// MARK: - 右侧详情：Skill（三块：安装位置、来源标识、SKILL.md 原文）
+// MARK: - 右侧详情：Skill（状态与检出、安装位置、来源标识、SKILL.md 原文）
 
 private struct SkillDetailPanel: View {
     let entry: SkillDirectoryEntry
+    let checkouts: [CheckoutCardReadModel]
     let markdown: String?
 
     var body: some View {
@@ -515,6 +517,10 @@ private struct SkillDetailPanel: View {
                         .font(.title2.bold())
                     HostLogoSlots(hosts: entry.hosts)
                 }
+
+                Divider()
+
+                CheckoutStatusBlock(checkouts: checkouts)
 
                 Divider()
 
@@ -535,6 +541,114 @@ private struct SkillDetailPanel: View {
             }
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+// MARK: - 详情块：状态与检出（逐检出，不造来源级聚合状态）
+
+private struct CheckoutStatusBlock: View {
+    let checkouts: [CheckoutCardReadModel]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("状态与检出")
+                .font(.headline)
+            ForEach(checkouts) { checkout in
+                CheckoutCard(checkout: checkout)
+            }
+        }
+    }
+}
+
+private struct CheckoutCard: View {
+    let checkout: CheckoutCardReadModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(checkout.state.displayName)
+                    .font(.headline)
+                Text(checkout.state.rawValue)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+            }
+            Text(checkout.state.recoveryDirection)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            fact("检出路径", checkout.facts.checkoutPath)
+            fact("Git common dir", checkout.facts.gitCommonDirectory ?? "Unknown")
+            fact("HEAD", headText)
+            fact("origin", checkout.facts.originRemoteURL ?? "无")
+            fact("upstream", upstreamText)
+            fact("相对位置", relativePositionText)
+            fact("严格 dirty", dirtyText)
+            fact("兄弟分支冲突", checkout.facts.siblingBranchConflict ? "是" : "否")
+            fact("worktree", worktreeText)
+            if let failure = checkout.facts.inspectionFailure {
+                fact("检查错误", failureText(failure))
+            }
+        }
+        .padding(10)
+        .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func fact(_ name: String, _ value: String) -> some View {
+        LabeledContent(name) {
+            Text(value)
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
+                .multilineTextAlignment(.trailing)
+        }
+    }
+
+    private var headText: String {
+        switch checkout.facts.head {
+        case .branch(let name, let sha): return "\(name) @ \(sha)"
+        case .detached(let sha): return "detached @ \(sha)"
+        case nil: return "Unknown"
+        }
+    }
+
+    private var upstreamText: String {
+        guard let upstream = checkout.facts.upstream else { return "无" }
+        return "\(upstream.ref) · \(upstream.remoteURL ?? "Unknown")"
+    }
+
+    private var relativePositionText: String {
+        switch checkout.facts.relativePosition {
+        case .unknown: return "Unknown（尚未检查）"
+        case .upToDate: return "ahead 0 · behind 0"
+        case .aheadOnly(let ahead): return "ahead \(ahead) · behind 0"
+        case .behindOnly(let behind): return "ahead 0 · behind \(behind)"
+        case .diverged(let ahead, let behind): return "ahead \(ahead) · behind \(behind)"
+        }
+    }
+
+    private var dirtyText: String {
+        let facts = checkout.facts.dirty
+        var kinds: [String] = []
+        if facts.staged { kinds.append("staged") }
+        if facts.unstaged { kinds.append("unstaged") }
+        if facts.untracked { kinds.append("untracked") }
+        if facts.unmerged { kinds.append("unmerged") }
+        if facts.submodule { kinds.append("submodule") }
+        kinds.append(contentsOf: facts.operations.map(\.rawValue).sorted())
+        return kinds.isEmpty ? "干净" : kinds.joined(separator: "、")
+    }
+
+    private var worktreeText: String {
+        checkout.facts.worktrees
+            .map { "\($0.path) [\($0.branch ?? "detached")]" }
+            .joined(separator: "\n")
+    }
+
+    private func failureText(_ failure: GitInspectionFailure) -> String {
+        switch failure {
+        case .notAWorkTree: return "不是有效 Git 工作树"
+        case .launchFailed: return "Git 启动失败"
+        case .timedOut: return "Git 命令超时"
+        case .commandFailed(let exitCode, _): return "Git 命令失败（exit \(exitCode)）"
         }
     }
 }

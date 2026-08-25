@@ -47,11 +47,20 @@ struct SkillDirectoryEntry: Identifiable, Hashable, Sendable {
     }
 }
 
+/// 一个已发现 Skill Source Checkout；以工作树根 Canonical Path 标识。
+struct SkillSourceCheckout: Identifiable, Hashable, Sendable {
+    let canonicalPath: String
+
+    var id: String { canonicalPath }
+}
+
 /// 来源仓库行（Variant F 呈现分组）：一个 Skill Source 及其全部子 Skill。
 struct SkillSourceItem: Identifiable, Hashable, Sendable {
     let id: SkillSourceKey
     let displayName: String
     let skills: [SkillDirectoryEntry]
+    /// 同一 Skill Source Key 下全部已发现物理检出。不得聚合成单一假状态。
+    let checkouts: [SkillSourceCheckout]
 
     /// 仓库行的宿主并集（全部子 Skill 的安装事实）。
     var hosts: Set<AgentHost> {

@@ -1,18 +1,18 @@
 # Current System Map
 
-Status: runnable discovery（Variant F 目录 IA）and Project Scan Root management
+Status: runnable discovery、实时 Git Fact / 12 态裁决与 Project Scan Root management
 
 本文件描述当前可验证的系统边界。产品动机、目标用户与目标体验见 repo://docs/product/vision.md。规划中的 Skill 扫描和更新能力不冒充现状。
 
 ## 当前事实
 
 - 产品：Pagugu，本地 macOS Agent Skill 管理与安全同步应用。
-- 当前阶段：可运行发现目录（Variant F IA：来源仓库行 + 无仓库可归行）与 Project Scan Root 管理。
+- 当前阶段：可运行发现目录、逐检出实时 Git Fact、12 态 Checkout Git State 裁决、逐检出详情卡片与 Project Scan Root 管理。
 - 技术栈：原生 Xcode macOS App、SwiftUI、Swift 6、macOS 14+。
 - 运行入口：`Pagugu/App/PaguguApp.swift`；稳定本地入口为 `script/build_and_run.sh`。
 - 分发：本地构建；App Sandbox 关闭。签名、公证和 GitHub Releases 尚未实现。
 - 持久状态：Persistence actor 读写 `~/Library/Application Support/com.dimon.pagugu/registry.json`。Registry 已接通 Project Scan Root 主张的添加、删除与按序读回；来源映射与观察槽的业务写入方由后续票接通。
-- 外部系统：当前运行时无外部系统。公开 GitHub 仓库已创建并用于 Issues；本地仓库尚未配置 remote 或推送代码，远程默认分支和 Actions 运行均不存在。
+- 外部系统：通过唯一 Git seam 调用本机 `git`，全部命令非交互、屏蔽仓库 hooks，且带单调时钟秒级 timeout；#19 只读扫描不访问远端。公开 GitHub 仓库只用于 Issues；本地代码尚未推送。
 
 ## 当前链路
 
@@ -24,7 +24,10 @@ Status: runnable discovery（Variant F 目录 IA）and Project Scan Root managem
       -> 正常态继续 / 受限恢复全窗口阻断
       -> Registry 投影 Project Scan Root 可用性
       -> Discovery 扫描 Personal + Project Scan Root
-      -> Identity 归因聚合为 Variant F 目录（来源仓库行 + 无仓库可归行）
+      -> Git 逐候选检出实时只读 inspection（无 Check Run，远端相对位置 Unknown）
+      -> Identity 以 Git origin 规范化 Source Key，聚合 Skill 且保留全部物理检出
+      -> Eligibility 按固定 precedence 裁决逐检出主状态
+      -> AppModel 发布 Skill Read Model
       -> WindowGroup + MenuBarExtra
       -> ContentView / MenuBarView
 
@@ -33,14 +36,16 @@ Status: runnable discovery（Variant F 目录 IA）and Project Scan Root managem
 | Module | Owns | Does not own | Public interface | Depends on | Verification |
 | --- | --- | --- | --- | --- | --- |
 | PaguguApp | 应用生命周期、主窗口与状态栏场景 | Skill 扫描、Git 状态、持久化 | macOS App 入口 | SwiftUI、AppKit | `script/build_and_run.sh --verify` |
-| ContentView | 主窗口 Variant F IA：平铺目录（来源仓库行可收起/展开 + 子 Skill 行 + 来源不明行）、Skill 详情三块（安装位置、来源标识、SKILL.md 原文）、欢迎引导与添加入口、工具栏扫描范围管理、Registry 故障全窗口阻断接管 | Skill Read Model 派生与主张规则、IO（经 AppModel intent） | SwiftUI `View` | SwiftUI、AppModel | App build |
+| ContentView | 主窗口 Variant F IA；Skill 详情四块含逐检出「状态与检出」卡片；扫描范围管理与 Registry 故障阻断 | Skill Read Model 派生、Checkout Git State 裁决、IO | SwiftUI `View` | SwiftUI、AppModel | App build |
 | MenuBarView | 打开主窗口与退出动作 | 更新状态和后台调度 | SwiftUI `View` | SwiftUI、AppKit | App build + launch |
 | AppIdentity | 产品展示名、Bundle ID、主窗口 ID | 用户配置 | 静态常量 | Swift 标准库 | `PaguguTests.testProductIdentity` |
 | Discovery | Discovery Scan：遍历全部 Scan Root、发现入口标注、软链接解析、Canonical Path 去重防环、SKILL.md 解析校验与原文读取、Git 工作树根检测（`.git` 存在性）、复制投影内容指纹（SHA-256，fail closed）、Scan Issue | 身份归因与指纹聚合（归 Identity）、Git 子进程 | `Discovery.scanAll(personalRoots:projectRoots:)`、`scanPersonalRoots(_:)`、`scanProjectRoot(_:)`、`skillMarkdown(atCanonicalPath:)`、`contentFingerprint(ofSkillAtCanonicalPath:)` | Foundation、CryptoKit | `PaguguTests/DiscoveryTests.swift` |
-| Identity | Skill Source Key 规范化、HostAttribution 归因表、Projection Type 派生、按 Skill Identity 聚合 Installation（零 Installation 纯来源保留）、按 Skill Source 分组目录、复制投影按内容指纹聚合呈现组（全部纯函数） | 文件系统遍历、Git 调用、任何副作用 | `SkillSourceKey.normalize(remoteURL:)`、`HostAttribution.hosts(for:)`、`SkillDirectory.contents(from:)` | Foundation、Discovery 值类型 | `PaguguTests/IdentityTests.swift` |
+| Identity | Skill Source Key 规范化、归因与聚合、Skill Source Checkout、同一 remote 多检出保留（全部纯函数） | 文件系统遍历、Git 调用、状态裁决 | `SkillSourceKey.normalize(remoteURL:)`、`SkillDirectory.contents(from:gitFactsByCheckoutPath:)` | Foundation、Discovery/Git 值类型 | `PaguguTests/IdentityTests.swift`、`AppModelTests.swift` |
+| Git | 唯一 Git 子进程 seam；非交互环境、timeout、exit/stderr 归一化；实时正交 Checkout Git Fact | Checkout Git State 与 Eligible Update 裁决、检查/更新编排 | `GitInspecting.inspectCheckout(at:scope:)`、`GitExecuting.fetch(remote:at:)` | Foundation、本机 git | `PaguguTests/GitEligibilityTests.swift` |
+| Eligibility | 12 态固定 precedence、稳定 reason code、中文名与恢复方向（纯函数） | Git 调用、持久化、UI | `CheckoutEligibility.evaluate(facts:sourceKey:)` | Git/Identity 值类型 | `PaguguTests/GitEligibilityTests.swift` |
 | Registry | Project Scan Root 串行 mutation、护栏、按序主张添加、显式删除与合法性/可用性派生 | registry.json 物理 IO、Discovery、UI、来源映射与观察槽的后续入口 | `AppRegistry.load()`、`addProjectScanRoot(_:)`、`removeProjectScanRoot(canonicalPath:)`、`projectScanRoots()` | Persistence、Foundation | `PaguguTests/RegistryTests.swift` |
 | Persistence | registry.json 的物理 IO、v1 持久记录类型、兼容分发、双 fsync 原子写、quarantine、外部修改检测 | 三类主张与审计记录的业务语义、Git/Discovery/Eligibility | `loadRegistry()`、`saveRegistry(_:)`、`resetRegistry(confirmed:)` | Foundation、Darwin | `PaguguTests/PersistenceTests.swift` |
-| AppModel | @MainActor composition root：Skill Read Model、受限恢复与主张动作错误投影、目录收起 UI 状态、UI intent 唯一入口、启动与刷新流水线编排 | 直接 Git/文件系统/持久 IO、业务规则重建 | `start()`、`rescan()`、`addProjectScanRoot(_:)`、`removeProjectScanRoot(canonicalPath:)`、`resetRegistry(confirmed:)`、`toggleSourceCollapsed(_:)`、`skillMarkdown(canonicalPath:)` | Registry、Discovery、Identity | `PaguguTests/AppModelTests.swift` |
+| AppModel | @MainActor composition root：启动/刷新串联 Registry、Discovery、Git、Identity、Eligibility并发布逐检出只读投影 | 直接 Git/文件系统/持久 IO、业务规则重建 | 既有 UI intents 与 `readModel` | Registry、Discovery、Git、Identity、Eligibility | `PaguguTests/AppModelTests.swift` |
 | build_and_run.sh | kill、build、launch、进程验证 | 签名、公证、发布 | `run|--debug|--logs|--telemetry|--verify` | `xcodebuild`、macOS CLI | `--verify` |
 
 ## 产品不变量
@@ -61,8 +66,8 @@ Status: runnable discovery（Variant F 目录 IA）and Project Scan Root managem
 ## 明确未实现
 
 - `SKILL.md` frontmatter 的完整 Agent Skills 规范校验（name/description 字段违规标注）。
-- Git 状态裁决、检查、更新与审计（#19–#26 后续票）。Git 子进程 seam（`GitInspecting`/`GitExecuting`）接通后，有远程的 Skill Source Key 由本地路径键升级为规范化远程 URL；当前来源仓库行全部使用本地 canonical 路径键。
-- Skill 详情「状态与检出」「相关记录」「更新动作」三块与目录行状态短语、五档静默排序（#19–#20 后续票）。
+- Check Run、Checkout Observation freshness、更新与审计（#21–#26 后续票）。因此 AppModel 当前只做 local-only inspection，有远程的检出也以 check-unknown 呈现，不冒充已检查。
+- Skill 详情「相关记录」「更新动作」两块与目录行状态短语、五档静默排序（#20 及后续票）。
 - 来源映射维护与失效生命周期（#25 后续票）；当前无仓库可归行只呈现「来源不明」事实（内容完全一致的复制安装聚合为只读呈现组，ADR-0001 §4）。
 - 审计证据（Audit Evidence）持久集合。
 - Logo、签名、公证与发布。

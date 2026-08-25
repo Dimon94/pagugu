@@ -3,7 +3,7 @@ import Foundation
 // L3 COORD: Pagugu/AppModel/AppModel.swift
 // POS: AppModel 模块（ADR-0009 §7）。@MainActor composition root：
 //      owns Skill Read Model、受限恢复模式投影、目录收起 UI 状态、全部 UI intent
-//      与启动/刷新编排。does not own 直接 Git/文件系统/持久 IO（经 Discovery/Registry seam）、
+//      与启动/刷新编排。does not own 直接 Git/文件系统/持久 IO（经 Git/Discovery/Registry seam）、
 //      业务规则重建。
 // TEST: repo://PaguguTests/AppModelTests.swift（Registry gate、Project Scan Root intent、
 //      目录投影与 intent 路由 smoke）。
@@ -25,13 +25,16 @@ final class AppModel: ObservableObject {
 
     private let personalRoots: [String]
     private let registry: AppRegistry
+    private let gitInspector: any GitInspecting
 
     init(
         personalRoots: [String] = Discovery.personalSkillRoots,
-        persistence: Persistence = .live
+        persistence: Persistence = .live,
+        gitInspector: any GitInspecting = GitClient()
     ) {
         self.personalRoots = personalRoots
         self.registry = AppRegistry(persistence: persistence, personalRoots: personalRoots)
+        self.gitInspector = gitInspector
     }
 
     // MARK: - 启动流水线（ADR-0009 §13）
@@ -56,13 +59,33 @@ final class AppModel: ObservableObject {
             personalRoots: personalRoots,
             projectRoots: projectScanRoots.filter(\.passesGuardrails).map(\.canonicalPath)
         )
-        let contents = SkillDirectory.contents(from: scanResult)
+        let checkoutPaths = Set(scanResult.skills.compactMap(\.repositoryRootPath)).sorted()
+        var factsByCheckoutPath: [String: CheckoutGitFacts] = [:]
+        for path in checkoutPaths {
+            // #19 尚无 Check Run/Observation 接线。相对位置保持 Unknown，裁决为「尚未检查」。
+            factsByCheckoutPath[path] = await gitInspector.inspectCheckout(at: path, scope: .localOnly)
+        }
+        let contents = SkillDirectory.contents(
+            from: scanResult,
+            gitFactsByCheckoutPath: factsByCheckoutPath
+        )
+        let checkoutCardsBySource = Dictionary(uniqueKeysWithValues: contents.sources.map { source in
+            let cards = source.checkouts.compactMap { checkout -> CheckoutCardReadModel? in
+                guard let facts = factsByCheckoutPath[checkout.canonicalPath] else { return nil }
+                return CheckoutCardReadModel(
+                    facts: facts,
+                    state: CheckoutEligibility.evaluate(facts: facts, sourceKey: source.id)
+                )
+            }
+            return (source.id, cards)
+        })
         readModel = SkillReadModel(
             sources: contents.sources,
             unattributedInstallations: contents.unattributedInstallations,
             issues: scanResult.issues,
             scanOutcome: scanResult.outcome,
-            projectScanRoots: projectScanRoots
+            projectScanRoots: projectScanRoots,
+            checkoutCardsBySource: checkoutCardsBySource
         )
     }
 

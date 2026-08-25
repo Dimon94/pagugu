@@ -16,6 +16,8 @@ struct SkillReadModel: Sendable {
     let scanOutcome: ScanOutcome
     /// Project Scan Root 主张的按序实时投影。
     let projectScanRoots: [ProjectScanRoot]
+    /// 按 Skill Source Key 保存逐检出卡片；卡片只投影实时事实与纯函数裁决。
+    private let checkoutCardsBySource: [SkillSourceKey: [CheckoutCardReadModel]]
     /// 是否为空态（无任何 Skill 且无 Issue）。
     let isEmpty: Bool
 
@@ -25,7 +27,8 @@ struct SkillReadModel: Sendable {
             unattributedInstallations: [],
             issues: [],
             scanOutcome: .complete,
-            projectScanRoots: []
+            projectScanRoots: [],
+            checkoutCardsBySource: [:]
         )
     }
 
@@ -34,13 +37,15 @@ struct SkillReadModel: Sendable {
         unattributedInstallations: [UnattributedInstallationItem],
         issues: [ScanIssue],
         scanOutcome: ScanOutcome,
-        projectScanRoots: [ProjectScanRoot] = []
+        projectScanRoots: [ProjectScanRoot] = [],
+        checkoutCardsBySource: [SkillSourceKey: [CheckoutCardReadModel]] = [:]
     ) {
         self.sources = sources
         self.unattributedInstallations = unattributedInstallations
         self.issues = issues
         self.scanOutcome = scanOutcome
         self.projectScanRoots = projectScanRoots
+        self.checkoutCardsBySource = checkoutCardsBySource
         self.isEmpty = sources.isEmpty && unattributedInstallations.isEmpty && issues.isEmpty
     }
 
@@ -70,6 +75,18 @@ struct SkillReadModel: Sendable {
     func unattributedItem(for id: String) -> UnattributedInstallationItem? {
         unattributedInstallations.first { $0.id == id }
     }
+
+    func checkoutCards(for sourceKey: SkillSourceKey) -> [CheckoutCardReadModel] {
+        checkoutCardsBySource[sourceKey] ?? []
+    }
+}
+
+/// Skill Read Model 中的一张逐检出卡片。主状态不覆盖正交事实。
+struct CheckoutCardReadModel: Identifiable, Sendable {
+    let facts: CheckoutGitFacts
+    let state: CheckoutGitState
+
+    var id: String { facts.checkoutPath }
 }
 
 /// 目录中的可选中行（主从选择模型）。
