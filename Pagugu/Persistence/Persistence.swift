@@ -5,9 +5,10 @@ import Foundation
 // INPUT: Application Support 目录或测试注入目录中的 registry.json 与 audit-history.json。
 // OUTPUT: RegistryDocument 当前主张、阻断式 RegistryRecovery，或 fail-open AuditDocument。
 // POS: Persistence 物理 owner。只依赖 Foundation，不拥有主张语义。
-// TEST: repo://PaguguTests/PersistenceTests.swift。
+// TEST: repo://PaguguTests/PersistenceTests.swift、repo://PaguguTests/CheckRunTests.swift。
 
 // L5 PARAM: Registry/Audit schemaVersion 当前只接受 1；Audit FIFO 上限 200。
+// Audit action 为 source-mapping 或 check-run；Check Run 只存 complete/partial/failed 与 scope 计数。
 // Registry 顶层恰好编码三类集合；未知字段可忽略且重写不保留。
 // PAIR: CheckoutObservation success 必须有 remoteTipSHA；failure 必须没有。
 // FAIL: 缺字段、类型不符、路径/身份配对无效均走损坏 quarantine。
@@ -114,21 +115,122 @@ struct AuditDocument: Codable, Equatable, Sendable {
 }
 
 struct AuditRecord: Codable, Equatable, Sendable {
+    enum Action: String, Codable, Equatable, Sendable {
+        case sourceMapping = "source-mapping"
+        case checkRun = "check-run"
+    }
+
     enum Outcome: String, Codable, Equatable, Sendable {
         case created
         case deleted
+        case complete
+        case partial
+        case failed
+    }
+
+    struct CheckRunScope: Codable, Equatable, Sendable {
+        let checkableCount: Int
+        let succeededCount: Int
+        let failedCount: Int
+        let skippedCount: Int
+
+        fileprivate var isValid: Bool {
+            [checkableCount, succeededCount, failedCount, skippedCount].allSatisfy { $0 >= 0 } &&
+                checkableCount == succeededCount + failedCount
+        }
     }
 
     let id: String
     let recordedAt: Date
+    let action: Action
     let outcome: Outcome
-    let installationCanonicalPath: String
-    let target: SourceMappingRecord
+    let installationCanonicalPath: String?
+    let target: SourceMappingRecord?
+    let checkRunScope: CheckRunScope?
+
+    init(
+        id: String,
+        recordedAt: Date,
+        outcome: Outcome,
+        installationCanonicalPath: String,
+        target: SourceMappingRecord
+    ) {
+        self.id = id
+        self.recordedAt = recordedAt
+        self.action = .sourceMapping
+        self.outcome = outcome
+        self.installationCanonicalPath = installationCanonicalPath
+        self.target = target
+        self.checkRunScope = nil
+    }
+
+    init(
+        id: String,
+        recordedAt: Date,
+        outcome: Outcome,
+        checkRunScope: CheckRunScope
+    ) {
+        self.id = id
+        self.recordedAt = recordedAt
+        self.action = .checkRun
+        self.outcome = outcome
+        self.installationCanonicalPath = nil
+        self.target = nil
+        self.checkRunScope = checkRunScope
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case recordedAt
+        case action
+        case outcome
+        case installationCanonicalPath
+        case target
+        case checkRunScope
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        recordedAt = try container.decode(Date.self, forKey: .recordedAt)
+        outcome = try container.decode(Outcome.self, forKey: .outcome)
+        installationCanonicalPath = try container.decodeIfPresent(
+            String.self,
+            forKey: .installationCanonicalPath
+        )
+        target = try container.decodeIfPresent(SourceMappingRecord.self, forKey: .target)
+        checkRunScope = try container.decodeIfPresent(CheckRunScope.self, forKey: .checkRunScope)
+        action = try container.decodeIfPresent(Action.self, forKey: .action) ?? .sourceMapping
+    }
 
     fileprivate var isValid: Bool {
-        !id.isEmpty && isNormalizedAbsolutePath(installationCanonicalPath) &&
-            isNormalizedSkillSourceKey(target.skillSourceKey) &&
-            isNormalizedRelativePath(target.repositoryRelativePath)
+        guard !id.isEmpty else { return false }
+        switch action {
+        case .sourceMapping:
+            guard outcome == .created || outcome == .deleted,
+                  let installationCanonicalPath,
+                  let target,
+                  checkRunScope == nil else { return false }
+            return isNormalizedAbsolutePath(installationCanonicalPath) &&
+                isNormalizedSkillSourceKey(target.skillSourceKey) &&
+                isNormalizedRelativePath(target.repositoryRelativePath)
+        case .checkRun:
+            guard [.complete, .partial, .failed].contains(outcome),
+                  installationCanonicalPath == nil,
+                  target == nil,
+                  let checkRunScope,
+                  checkRunScope.isValid else { return false }
+            switch outcome {
+            case .complete:
+                return checkRunScope.failedCount == 0
+            case .partial:
+                return checkRunScope.succeededCount > 0 && checkRunScope.failedCount > 0
+            case .failed:
+                return checkRunScope.succeededCount == 0 && checkRunScope.failedCount > 0
+            case .created, .deleted:
+                return false
+            }
+        }
     }
 }
 
@@ -395,7 +497,9 @@ actor Persistence {
         }
     }
 
-    /// L4 OUT: append-only，超过 200 条时淘汰最旧记录；复用 Registry 的 durable write。
+    /// L4 IN: record 必须满足 action/outcome/payload 配对；不得包含原始命令输出。
+    /// OUT: append-only，超过 200 条时淘汰最旧记录；复用 Registry 的 durable write。
+    /// FAIL: 读取损坏或写入失败均留在审计故障域，不改变调用方主动作。
     func appendAuditEvidence(_ record: AuditRecord) throws {
         guard record.isValid else { throw AuditValidationError.invalidDocument }
         let current = loadAuditEvidence()

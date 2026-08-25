@@ -3,7 +3,8 @@ import Foundation
 // L3 COORD: Pagugu/AppModel/AppModel.swift
 // POS: AppModel 模块（ADR-0009 §7）。@MainActor composition root：
 //      owns Skill Read Model、受限恢复与来源映射错误投影、目录收起与 Check Run 瞬态、全部 UI intent
-//      与启动/刷新编排。does not own 直接 Git/文件系统/持久 IO（经 Git/Discovery/Registry/Runs seam）、
+//      与启动/刷新编排；每次发布按实时事实重推导观察 freshness。does not own 直接 Git/文件系统/持久 IO
+//      （经 Git/Discovery/Registry/Audit/Runs seam）、
 //      业务规则重建。
 // TEST: repo://PaguguTests/AppModelTests.swift（Registry gate、Project Scan Root intent、
 //      目录投影与 intent 路由 smoke）。
@@ -28,6 +29,7 @@ final class AppModel: ObservableObject {
 
     private let personalRoots: [String]
     private let registry: AppRegistry
+    private let audit: AuditEvidence
     private let gitInspector: any GitInspecting
     private let gitExecutor: any GitExecuting
     private var checkScope: [CheckRunTarget] = []
@@ -42,6 +44,7 @@ final class AppModel: ObservableObject {
     ) {
         self.personalRoots = personalRoots
         self.registry = AppRegistry(persistence: persistence, personalRoots: personalRoots)
+        self.audit = AuditEvidence(persistence: persistence)
         self.gitInspector = gitInspector
         self.gitExecutor = gitExecutor
     }
@@ -115,10 +118,23 @@ final class AppModel: ObservableObject {
                 let checkOutcome = belongsToDisplayedRun
                     ? checkItemOutcomes[checkout.canonicalPath]
                     : nil
+                let storedObservation = observations[checkout.canonicalPath]
+                let displayedObservation: CheckoutObservation? = storedObservation.flatMap { observation -> CheckoutObservation? in
+                    guard CheckoutEligibility.observationMatchesIdentity(
+                        observation,
+                        facts: facts,
+                        sourceKey: source.id
+                    ) else { return nil }
+                    return observation.result == .failure || CheckoutEligibility.observationIsFresh(
+                        observation,
+                        facts: facts,
+                        sourceKey: source.id
+                    ) ? observation : nil
+                }
                 return CheckoutCardReadModel(
                     facts: facts,
                     state: CheckoutEligibility.evaluate(facts: facts, sourceKey: source.id),
-                    observation: observations[checkout.canonicalPath],
+                    observation: displayedObservation,
                     checkOutcome: checkOutcome,
                     isChecking: checkRunProgress != nil &&
                         belongsToDisplayedRun && checkOutcome == nil &&
@@ -182,7 +198,8 @@ final class AppModel: ObservableObject {
         let runner = CheckRunner(
             gitInspector: gitInspector,
             gitExecutor: gitExecutor,
-            registry: registry
+            registry: registry,
+            audit: audit
         )
         for await event in runner.startCheck(scope: frozenScope) {
             switch event {

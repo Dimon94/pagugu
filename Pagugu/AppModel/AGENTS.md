@@ -1,6 +1,6 @@
 # AppModel 模块合同（L2）
 
-模块职责: @MainActor composition root（ADR-0009 §7）。owns Skill Read Model 只读投影（含人工来源映射、目录逐检出状态短语与五档静默排序）、受限恢复与主张动作错误投影（RegistryRecovery / ProjectScanRootError / SourceMappingError）、目录收起与 Check Run 瞬态、全部 UI intent 唯一入口、启动与刷新流水线编排（Registry → Discovery → Git inspection → Identity → Eligibility）。does not own 直接 Git/文件系统/持久 IO（经 Git/Registry/Discovery/Runs seam）或 Checkout Git State/更新资格重建。
+模块职责: @MainActor composition root（ADR-0009 §7）。owns Skill Read Model 只读投影（含人工来源映射、目录逐检出状态短语与五档静默排序）、受限恢复与主张动作错误投影（RegistryRecovery / ProjectScanRootError / SourceMappingError）、目录收起与 Check Run 瞬态、全部 UI intent 唯一入口、启动与刷新流水线编排（Registry → Discovery → Git inspection → Identity → Eligibility）。每次发布按实时身份与 remote-tracking ref 重推导观察 freshness；失效成功观察保留在 Registry 但不投影观察时间。does not own 直接 Git/文件系统/持久 IO（经 Git/Registry/Audit/Discovery/Runs seam）或 Checkout Git State/更新资格重建。
 
 成员清单:
 - `AppModel.swift`：公开入口含启动、刷新、全量手动检查、Project Scan Root 与来源映射创建/删除；映射写前从当前投影重查具体 Installation 与目标 Skill。公开只读投影含 `readModel`、Check Run 进度/汇总与 Registry 状态。

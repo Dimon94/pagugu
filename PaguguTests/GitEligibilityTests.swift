@@ -35,6 +35,70 @@ final class GitEligibilityTests: XCTestCase {
         XCTAssertEqual(cases.map { CheckoutEligibility.evaluate(facts: $0.0, sourceKey: $0.1) }, cases.map { $0.2 })
     }
 
+    func testObservationFreshnessComparesEveryIdentityFieldAndRemoteTrackingTip() throws {
+        let currentFacts = facts(upstream: GitUpstream(
+            ref: "origin/main",
+            remoteName: "origin",
+            remoteURL: "https://example.com/team/skills.git",
+            sha: "observed-tip"
+        ))
+        let digest = try XCTUnwrap(CheckoutEligibility.identityDigest(
+            facts: currentFacts,
+            sourceKey: sourceKey
+        ))
+        let completedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        func observation(
+            result: CheckoutObservation.Result = .success,
+            tip: String? = "observed-tip",
+            digest: CheckoutIdentityDigest
+        ) -> CheckoutObservation {
+            CheckoutObservation(
+                result: result,
+                completedAt: completedAt,
+                remoteTipSHA: tip,
+                identityDigest: digest
+            )
+        }
+        let cases: [(String, CheckoutObservation, Bool)] = [
+            ("全部一致", observation(digest: digest), true),
+            ("失败观察", observation(result: .failure, tip: nil, digest: digest), false),
+            ("检出路径", observation(digest: replacing(digest, checkoutPath: "/other")), false),
+            ("Git common dir", observation(digest: replacing(digest, gitCommonDirectory: "/other/.git")), false),
+            ("规范化 remote", observation(digest: replacing(digest, normalizedRemoteURL: "example.com/other/skills")), false),
+            ("branch", observation(digest: replacing(digest, branchName: "other")), false),
+            ("upstream ref", observation(digest: replacing(digest, upstreamRefName: "origin/other")), false),
+            ("remote-tracking tip", observation(tip: "old-tip", digest: digest), false),
+        ]
+
+        for (name, observation, expected) in cases {
+            XCTAssertEqual(
+                CheckoutEligibility.observationIsFresh(
+                    observation,
+                    facts: currentFacts,
+                    sourceKey: sourceKey
+                ),
+                expected,
+                name
+            )
+        }
+
+        let changedHeadAndDirty = facts(
+            head: .branch(name: "main", sha: "new-head"),
+            upstream: currentFacts.upstream,
+            dirty: GitDirtyFacts(staged: true)
+        )
+        XCTAssertTrue(CheckoutEligibility.observationIsFresh(
+            observation(digest: digest),
+            facts: changedHeadAndDirty,
+            sourceKey: sourceKey
+        ), "HEAD 与 dirty 是实时裁决事实，不使观察失效")
+        XCTAssertFalse(CheckoutEligibility.observationIsFresh(
+            observation(digest: digest),
+            facts: currentFacts,
+            sourceKey: .remoteURL("example.com/other/skills")
+        ))
+    }
+
     func testEveryCheckoutStateHasStableCodeChineseNameAndRecovery() {
         XCTAssertEqual(
             CheckoutGitState.allCases.map(\.rawValue),
@@ -251,6 +315,64 @@ final class GitEligibilityTests: XCTestCase {
         }
     }
 
+    func testManualFetchInvalidatesObservationUntilAReplacementObservationIsRecorded() async throws {
+        let repository = try makeRepository(named: "freshness-fetch")
+        let client = GitClient()
+        let key = try sourceKey(of: repository)
+        let initialFacts = await client.inspectCheckout(
+            at: repository.repo.path,
+            scope: .afterSuccessfulCheck
+        )
+        let initialTip = try XCTUnwrap(initialFacts.upstream?.sha)
+        let digest = try XCTUnwrap(CheckoutEligibility.identityDigest(facts: initialFacts, sourceKey: key))
+        let observation = CheckoutObservation(
+            result: .success,
+            completedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            remoteTipSHA: initialTip,
+            identityDigest: digest
+        )
+        XCTAssertTrue(CheckoutEligibility.observationIsFresh(
+            observation,
+            facts: initialFacts,
+            sourceKey: key
+        ))
+
+        try advanceRemote(repository)
+        try await client.fetch(
+            remote: try XCTUnwrap(initialFacts.upstream).remoteName,
+            upstreamRef: try XCTUnwrap(initialFacts.upstream).ref,
+            at: repository.repo.path
+        )
+        let movedFacts = await client.inspectCheckout(at: repository.repo.path, scope: .localOnly)
+
+        XCTAssertFalse(CheckoutEligibility.observationIsFresh(
+            observation,
+            facts: movedFacts,
+            sourceKey: key
+        ))
+        XCTAssertEqual(CheckoutEligibility.evaluate(facts: movedFacts, sourceKey: key), .checkUnknown)
+
+        let checkedFacts = await client.inspectCheckout(
+            at: repository.repo.path,
+            scope: .afterSuccessfulCheck
+        )
+        let replacement = CheckoutObservation(
+            result: .success,
+            completedAt: Date(timeIntervalSince1970: 1_700_000_100),
+            remoteTipSHA: try XCTUnwrap(checkedFacts.upstream?.sha),
+            identityDigest: try XCTUnwrap(CheckoutEligibility.identityDigest(
+                facts: checkedFacts,
+                sourceKey: key
+            ))
+        )
+        XCTAssertTrue(CheckoutEligibility.observationIsFresh(
+            replacement,
+            facts: checkedFacts,
+            sourceKey: key
+        ))
+        XCTAssertEqual(CheckoutEligibility.evaluate(facts: checkedFacts, sourceKey: key), .updateAvailable)
+    }
+
     func testFetchMovesOnlyRemoteTrackingRef() async throws {
         let repository = try makeRepository(named: "fetch-side-effect")
         try git(["checkout", "-b", "other"], at: repository.repo)
@@ -274,6 +396,23 @@ final class GitEligibilityTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: repository.repo.appendingPathComponent("tracked.txt")), fileBefore)
         XCTAssertNotEqual(try git(["rev-parse", "origin/main"], at: repository.repo), remoteBefore)
         XCTAssertEqual(try git(["rev-parse", "origin/other"], at: repository.repo), unrelatedRemoteBefore)
+    }
+
+    private func replacing(
+        _ digest: CheckoutIdentityDigest,
+        checkoutPath: String? = nil,
+        gitCommonDirectory: String? = nil,
+        normalizedRemoteURL: String? = nil,
+        branchName: String? = nil,
+        upstreamRefName: String? = nil
+    ) -> CheckoutIdentityDigest {
+        CheckoutIdentityDigest(
+            checkoutCanonicalPath: checkoutPath ?? digest.checkoutCanonicalPath,
+            gitCommonDirIdentifier: gitCommonDirectory ?? digest.gitCommonDirIdentifier,
+            normalizedRemoteURL: normalizedRemoteURL ?? digest.normalizedRemoteURL,
+            branchName: branchName ?? digest.branchName,
+            upstreamRefName: upstreamRefName ?? digest.upstreamRefName
+        )
     }
 
     private func facts(

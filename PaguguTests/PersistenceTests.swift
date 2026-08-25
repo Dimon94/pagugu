@@ -262,6 +262,20 @@ final class PersistenceTests: XCTestCase {
         XCTAssertEqual(reloaded, .ready(.empty))
     }
 
+    func testAuditV1KeepsPreActionSourceMappingRecordsReadable() async throws {
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let json = #"{"schemaVersion":1,"records":[{"id":"legacy","recordedAt":"2026-08-25T00:00:00Z","outcome":"created","installationCanonicalPath":"/installation","target":{"skillSourceKey":"github.com/Owner/repo","repositoryRelativePath":"skills/example"}}]}"#
+        try Data(json.utf8).write(to: directoryURL.appendingPathComponent("audit-history.json"))
+        let persistence = Persistence(directoryURL: directoryURL)
+
+        let audit = await persistence.loadAuditEvidence()
+
+        XCTAssertEqual(audit.records.count, 1)
+        XCTAssertEqual(audit.records.first?.action, .sourceMapping)
+        XCTAssertEqual(audit.records.first?.outcome, .created)
+        XCTAssertEqual(audit.records.first?.installationCanonicalPath, "/installation")
+    }
+
     func testAuditEvidenceKeepsLatestTwoHundredRecords() async throws {
         let persistence = Persistence(directoryURL: directoryURL)
         let target = SourceMappingRecord(

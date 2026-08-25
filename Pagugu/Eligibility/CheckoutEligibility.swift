@@ -1,9 +1,9 @@
 import Foundation
 
 // L3 COORD: Pagugu/Eligibility/CheckoutEligibility.swift
-// POS: Eligibility 模块（ADR-0004、ADR-0009）。owns 12 态 precedence、观察身份与新鲜度裁决。
+// POS: Eligibility 模块（ADR-0004、ADR-0009）。owns 12 态 precedence、观察身份与 freshness 裁决。
 //      纯函数；does not own Git 调用、持久化或 UI。
-// TEST: repo://PaguguTests/GitEligibilityTests.swift（precedence 真值表）。
+// TEST: repo://PaguguTests/GitEligibilityTests.swift（precedence 与 freshness 表、真实 fetch 失效/恢复）。
 
 enum CheckoutGitState: String, CaseIterable, Equatable, Sendable {
     case inspectionFailed = "inspection-failed"
@@ -99,13 +99,25 @@ enum CheckoutEligibility {
         )
     }
 
+    // L4 IN: Registry 中的观察与同一检出的实时 Git Fact / Skill Source Key。
+    // OUT: 完整身份摘要逐字段一致时为 true；不检查 result 或 remote-tracking tip。
+    static func observationMatchesIdentity(
+        _ observation: CheckoutObservation,
+        facts: CheckoutGitFacts,
+        sourceKey: SkillSourceKey
+    ) -> Bool {
+        observation.identityDigest == identityDigest(facts: facts, sourceKey: sourceKey)
+    }
+
+    // L4 OUT: 仅成功观察、身份一致且当前 upstream SHA 等于观察 tip 时有效。
+    // INVARIANT: HEAD 与 dirty 不参与失效；无 TTL；本函数不修改或删除观察记录。
     static func observationIsFresh(
         _ observation: CheckoutObservation,
         facts: CheckoutGitFacts,
         sourceKey: SkillSourceKey
     ) -> Bool {
         observation.result == .success &&
-            observation.identityDigest == identityDigest(facts: facts, sourceKey: sourceKey) &&
+            observationMatchesIdentity(observation, facts: facts, sourceKey: sourceKey) &&
             observation.remoteTipSHA == facts.upstream?.sha
     }
 }

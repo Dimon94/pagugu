@@ -1,8 +1,9 @@
 import Foundation
 
 // L3 COORD: Pagugu/Runs/CheckRun.swift
-// POS: Runs 模块（ADR-0009 §5）。owns 全量 Check Run 的冻结 scope、顺序 fetch、身份复核与逐项事件。
-// TEST: repo://PaguguTests/CheckRunTests.swift。
+// POS: Runs 模块（ADR-0009 §5）。owns 全量 Check Run 的冻结 scope、顺序 fetch、身份复核、
+//      逐项事件、三态汇总与 terminal 审计调用。
+// TEST: repo://PaguguTests/CheckRunTests.swift（逐项观察、汇总、审计 terminal 与 fail-open）。
 
 struct CheckRunTarget: Sendable {
     let sourceKey: SkillSourceKey
@@ -73,15 +74,18 @@ final class CheckRunner: Sendable {
     private let gitInspector: any GitInspecting
     private let gitExecutor: any GitExecuting
     private let registry: AppRegistry
+    private let audit: AuditEvidence
 
     init(
         gitInspector: any GitInspecting,
         gitExecutor: any GitExecuting,
-        registry: AppRegistry
+        registry: AppRegistry,
+        audit: AuditEvidence
     ) {
         self.gitInspector = gitInspector
         self.gitExecutor = gitExecutor
         self.registry = registry
+        self.audit = audit
     }
 
     static func notApplicableState(for target: CheckRunTarget) -> CheckoutGitState? {
@@ -89,7 +93,8 @@ final class CheckRunner: Sendable {
         return skipStates.contains(state) ? state : nil
     }
 
-    // L6 CHAIN: 冻结 scope → 先发布不适用项 → 顺序 fetch → 重读身份 → durable 落槽 → 逐项发布 → 汇总。
+    // L6 CHAIN: 冻结 scope → 先发布不适用项 → 顺序 fetch → 重读身份 → durable 落槽 → 逐项发布
+    //           → 汇总 → best-effort terminal 审计 → finished。审计失败不改变 summary。
     func startCheck(scope: [CheckRunTarget]) -> AsyncStream<CheckRunEvent> {
         AsyncStream { continuation in
             Task {
@@ -121,12 +126,20 @@ final class CheckRunner: Sendable {
                 }
 
                 let outcome: CheckRunOutcome = failed == 0 ? .complete : (succeeded == 0 ? .failed : .partial)
-                continuation.yield(.finished(CheckRunSummary(
+                let summary = CheckRunSummary(
                     outcome: outcome,
                     succeeded: succeeded,
                     failed: failed,
                     skipped: skipped.count
-                )))
+                )
+                await audit.recordCheckRun(
+                    outcome: outcome.auditOutcome,
+                    checkableCount: targets.count,
+                    succeededCount: succeeded,
+                    failedCount: failed,
+                    skippedCount: skipped.count
+                )
+                continuation.yield(.finished(summary))
                 continuation.finish()
             }
         }
@@ -195,4 +208,14 @@ final class CheckRunner: Sendable {
     private static let skipStates: Set<CheckoutGitState> = [
         .noRemote, .detached, .noUpstream, .upstreamMismatch, .siblingConflict,
     ]
+}
+
+private extension CheckRunOutcome {
+    var auditOutcome: AuditRecord.Outcome {
+        switch self {
+        case .complete: return .complete
+        case .partial: return .partial
+        case .failed: return .failed
+        }
+    }
 }

@@ -605,6 +605,153 @@ final class AppModelTests: XCTestCase {
     }
 
     @MainActor
+    func testRestartHidesStaleSuccessfulObservationWithoutDeletingItAndRevivesWhenFactsReturn() async throws {
+        let repo = tmp.appendingPathComponent("repo")
+        try makeWorkTree(at: repo)
+        try writeSkill(at: repo.appendingPathComponent("skills/helper"), name: "helper")
+        let remoteURL = "https://example.com/team/skills.git"
+        let sourceKey = SkillSourceKey.remoteURL("example.com/team/skills")
+        let dataDirectory = tmp.appendingPathComponent("data")
+        let persistence = Persistence(directoryURL: dataDirectory)
+        _ = await persistence.loadRegistry()
+        let digest = CheckoutIdentityDigest(
+            checkoutCanonicalPath: repo.path,
+            gitCommonDirIdentifier: repo.path + "/.git",
+            normalizedRemoteURL: sourceKey.registryValue,
+            branchName: "main",
+            upstreamRefName: "origin/main"
+        )
+        let completedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let observation = CheckoutObservation(
+            result: .success,
+            completedAt: completedAt,
+            remoteTipSHA: "observed-tip",
+            identityDigest: digest
+        )
+        try await persistence.saveRegistry(RegistryDocument(
+            schemaVersion: RegistryDocument.currentSchemaVersion,
+            projectScanRoots: [],
+            sourceMappings: [:],
+            checkoutObservations: [repo.path: observation]
+        ))
+        let staleFacts = CheckoutGitFacts(
+            checkoutPath: repo.path,
+            gitCommonDirectory: repo.path + "/.git",
+            head: .branch(name: "main", sha: "head"),
+            originRemoteURL: remoteURL,
+            upstream: GitUpstream(
+                ref: "origin/main",
+                remoteName: "origin",
+                remoteURL: remoteURL,
+                sha: "moved-tip"
+            ),
+            dirty: .clean,
+            relativePosition: .unknown,
+            worktrees: [GitWorktree(path: repo.path, branch: "main")],
+            siblingBranchConflict: false,
+            inspectionFailure: nil
+        )
+        let staleModel = AppModel(
+            personalRoots: [repo.path],
+            persistence: Persistence(directoryURL: dataDirectory),
+            gitInspector: FakeGitInspector(factsByPath: [repo.path: staleFacts])
+        )
+
+        await staleModel.start()
+
+        let staleSource = try XCTUnwrap(staleModel.readModel.sources.first)
+        let staleCard = try XCTUnwrap(staleModel.readModel.checkoutCards(for: staleSource.id).first)
+        XCTAssertEqual(staleCard.state, .checkUnknown)
+        XCTAssertNil(staleCard.observation, "无效成功观察必须按从未检查投影，不显示旧观察时间")
+        XCTAssertNil(staleModel.checkRunProgress, "重启不得恢复检查中状态")
+        guard case .ready(let retained) = await Persistence(directoryURL: dataDirectory).loadRegistry() else {
+            return XCTFail("失效观察仍应保留在 Registry")
+        }
+        XCTAssertEqual(retained.checkoutObservations[repo.path], observation)
+
+        let restoredFacts = CheckoutGitFacts(
+            checkoutPath: repo.path,
+            gitCommonDirectory: repo.path + "/.git",
+            head: .branch(name: "main", sha: "head"),
+            originRemoteURL: remoteURL,
+            upstream: GitUpstream(
+                ref: "origin/main",
+                remoteName: "origin",
+                remoteURL: remoteURL,
+                sha: "observed-tip"
+            ),
+            dirty: .clean,
+            relativePosition: .behindOnly(1),
+            worktrees: [GitWorktree(path: repo.path, branch: "main")],
+            siblingBranchConflict: false,
+            inspectionFailure: nil
+        )
+        let revivedModel = AppModel(
+            personalRoots: [repo.path],
+            persistence: Persistence(directoryURL: dataDirectory),
+            gitInspector: FakeGitInspector(factsByPath: [repo.path: restoredFacts])
+        )
+
+        await revivedModel.start()
+
+        let revivedSource = try XCTUnwrap(revivedModel.readModel.sources.first)
+        let revivedCard = try XCTUnwrap(revivedModel.readModel.checkoutCards(for: revivedSource.id).first)
+        XCTAssertEqual(revivedCard.state, .updateAvailable)
+        XCTAssertEqual(revivedCard.observation?.completedAt, completedAt)
+        XCTAssertFalse(revivedCard.isChecking)
+    }
+
+    @MainActor
+    func testRestartDoesNotRebindFailureObservationAfterIdentityChanges() async throws {
+        let repo = tmp.appendingPathComponent("repo")
+        try makeWorkTree(at: repo)
+        try writeSkill(at: repo.appendingPathComponent("skills/helper"), name: "helper")
+        let remoteURL = "https://example.com/team/skills.git"
+        let dataDirectory = tmp.appendingPathComponent("data")
+        let persistence = Persistence(directoryURL: dataDirectory)
+        _ = await persistence.loadRegistry()
+        let observation = CheckoutObservation(
+            result: .failure,
+            completedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            remoteTipSHA: nil,
+            identityDigest: CheckoutIdentityDigest(
+                checkoutCanonicalPath: repo.path,
+                gitCommonDirIdentifier: repo.path + "/.git",
+                normalizedRemoteURL: "example.com/team/skills",
+                branchName: "main",
+                upstreamRefName: "origin/main"
+            )
+        )
+        try await persistence.saveRegistry(RegistryDocument(
+            schemaVersion: RegistryDocument.currentSchemaVersion,
+            projectScanRoots: [],
+            sourceMappings: [:],
+            checkoutObservations: [repo.path: observation]
+        ))
+        let reboundFacts = checkoutFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            head: .branch(name: "other", sha: "head")
+        )
+        let model = AppModel(
+            personalRoots: [repo.path],
+            persistence: Persistence(directoryURL: dataDirectory),
+            gitInspector: FakeGitInspector(factsByPath: [repo.path: reboundFacts])
+        )
+
+        await model.start()
+
+        let source = try XCTUnwrap(model.readModel.sources.first)
+        let card = try XCTUnwrap(model.readModel.checkoutCards(for: source.id).first)
+        XCTAssertEqual(card.state, .checkUnknown)
+        XCTAssertNil(card.observation, "旧失败观察不得错绑到 branch/upstream 已变化的检出")
+        guard case .ready(let retained) = await Persistence(directoryURL: dataDirectory).loadRegistry() else {
+            return XCTFail("身份变化只影响投影，不删除观察槽")
+        }
+        XCTAssertEqual(retained.checkoutObservations[repo.path], observation)
+    }
+
+    @MainActor
     func testCheckNowPublishesFreshObservationAndUpdateAvailableState() async throws {
         let repo = tmp.appendingPathComponent("repo")
         try makeWorkTree(at: repo)

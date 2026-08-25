@@ -26,7 +26,12 @@ final class CheckRunTests: XCTestCase {
         let persistence = Persistence(directoryURL: temporaryDirectory)
         let registry = AppRegistry(persistence: persistence, personalRoots: [])
         _ = await registry.load()
-        let runner = CheckRunner(gitInspector: client, gitExecutor: client, registry: registry)
+        let runner = CheckRunner(
+            gitInspector: client,
+            gitExecutor: client,
+            registry: registry,
+            audit: AuditEvidence(persistence: persistence)
+        )
         var scope = [
             CheckRunTarget(sourceKey: remoteKey, facts: facts(path: checkedPath)),
             CheckRunTarget(sourceKey: .localPath(skippedPath), facts: facts(path: skippedPath, remoteURL: nil, upstream: nil)),
@@ -67,6 +72,112 @@ final class CheckRunTests: XCTestCase {
         _ = await reloaded.load()
         let reloadedObservations = await reloaded.checkoutObservations()
         XCTAssertEqual(reloadedObservations[checkedPath]?.remoteTipSHA, "remote-tip", "观察必须跨重启读回")
+    }
+
+    func testCheckRunAppendsOneTerminalAuditRecordWithOutcomeAndScopeCountsOnly() async throws {
+        let path = "/checked"
+        let sourceKey = SkillSourceKey.remoteURL("example.com/team/skills")
+        let checkedFacts = facts(path: path, remoteTipSHA: "remote-tip", relativePosition: .behindOnly(1))
+        let client = FakeGitClient(factsAfterFetch: [path: checkedFacts])
+        let persistence = Persistence(directoryURL: temporaryDirectory)
+        let registry = AppRegistry(persistence: persistence, personalRoots: [])
+        _ = await registry.load()
+        let runner = CheckRunner(
+            gitInspector: client,
+            gitExecutor: client,
+            registry: registry,
+            audit: AuditEvidence(persistence: persistence)
+        )
+
+        _ = await collect(runner.startCheck(scope: [
+            CheckRunTarget(sourceKey: sourceKey, facts: facts(path: path)),
+        ]))
+
+        let audit = await persistence.loadAuditEvidence()
+        let record = try XCTUnwrap(audit.records.first)
+        XCTAssertEqual(audit.records.count, 1)
+        XCTAssertEqual(record.action, .checkRun)
+        XCTAssertEqual(record.outcome, .complete)
+        XCTAssertEqual(record.checkRunScope, AuditRecord.CheckRunScope(
+            checkableCount: 1,
+            succeededCount: 1,
+            failedCount: 0,
+            skippedCount: 0
+        ))
+        XCTAssertNil(record.installationCanonicalPath)
+        XCTAssertNil(record.target)
+        let bytes = try Data(contentsOf: temporaryDirectory.appendingPathComponent("audit-history.json"))
+        let json = String(decoding: bytes, as: UTF8.self)
+        XCTAssertFalse(json.contains(path), "Check Run 审计不得保存检出或失败清单")
+        XCTAssertFalse(json.contains("stdout"))
+        XCTAssertFalse(json.contains("stderr"))
+        XCTAssertFalse(json.contains("exitCode"))
+    }
+
+    func testAuditWriteFailureDoesNotChangeCompletedCheckOutcomeOrObservation() async throws {
+        let path = "/checked"
+        let sourceKey = SkillSourceKey.remoteURL("example.com/team/skills")
+        let checkedFacts = facts(path: path, remoteTipSHA: "remote-tip", relativePosition: .behindOnly(1))
+        let client = FakeGitClient(factsAfterFetch: [path: checkedFacts])
+        let persistence = Persistence(directoryURL: temporaryDirectory)
+        let registry = AppRegistry(persistence: persistence, personalRoots: [])
+        _ = await registry.load()
+        try FileManager.default.createDirectory(
+            at: temporaryDirectory.appendingPathComponent("audit-history.json"),
+            withIntermediateDirectories: true
+        )
+        let runner = CheckRunner(
+            gitInspector: client,
+            gitExecutor: client,
+            registry: registry,
+            audit: AuditEvidence(persistence: persistence)
+        )
+
+        let events = await collect(runner.startCheck(scope: [
+            CheckRunTarget(sourceKey: sourceKey, facts: facts(path: path)),
+        ]))
+
+        XCTAssertEqual(events.last, .finished(CheckRunSummary(
+            outcome: .complete,
+            succeeded: 1,
+            failed: 0,
+            skipped: 0
+        )))
+        let observations = await registry.checkoutObservations()
+        XCTAssertEqual(observations[path]?.remoteTipSHA, "remote-tip")
+    }
+
+    func testCorruptAuditReadFailsOpenAndCheckWritesNewTerminalHistory() async throws {
+        let path = "/checked"
+        let sourceKey = SkillSourceKey.remoteURL("example.com/team/skills")
+        let checkedFacts = facts(path: path, remoteTipSHA: "remote-tip", relativePosition: .behindOnly(1))
+        let client = FakeGitClient(factsAfterFetch: [path: checkedFacts])
+        let persistence = Persistence(directoryURL: temporaryDirectory)
+        let registry = AppRegistry(persistence: persistence, personalRoots: [])
+        _ = await registry.load()
+        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        try Data("{".utf8).write(to: temporaryDirectory.appendingPathComponent("audit-history.json"))
+        let runner = CheckRunner(
+            gitInspector: client,
+            gitExecutor: client,
+            registry: registry,
+            audit: AuditEvidence(persistence: persistence)
+        )
+
+        let events = await collect(runner.startCheck(scope: [
+            CheckRunTarget(sourceKey: sourceKey, facts: facts(path: path)),
+        ]))
+
+        XCTAssertEqual(events.last, .finished(CheckRunSummary(
+            outcome: .complete,
+            succeeded: 1,
+            failed: 0,
+            skipped: 0
+        )))
+        let audit = await persistence.loadAuditEvidence()
+        XCTAssertEqual(audit.records.map(\.outcome), [.complete])
+        let files = try FileManager.default.contentsOfDirectory(atPath: temporaryDirectory.path)
+        XCTAssertTrue(files.contains { $0.hasPrefix("audit-history.corrupt-") })
     }
 
     func testSkipSetContainsOnlyTheFiveLocalBlockers() {
@@ -123,7 +234,12 @@ final class CheckRunTests: XCTestCase {
             identityDigest: digest
         ))
         let client = FakeGitClient(factsAfterFetch: [path: initialFacts], fetchFailures: [path])
-        let runner = CheckRunner(gitInspector: client, gitExecutor: client, registry: registry)
+        let runner = CheckRunner(
+            gitInspector: client,
+            gitExecutor: client,
+            registry: registry,
+            audit: AuditEvidence(persistence: persistence)
+        )
 
         let events = await collect(runner.startCheck(scope: [CheckRunTarget(sourceKey: sourceKey, facts: initialFacts)]))
 
@@ -136,6 +252,14 @@ final class CheckRunTests: XCTestCase {
             return item.outcome == .failed(.fetchFailed)
         })
         XCTAssertEqual(events.last, .finished(CheckRunSummary(outcome: .failed, succeeded: 0, failed: 1, skipped: 0)))
+        let audit = await persistence.loadAuditEvidence()
+        XCTAssertEqual(audit.records.last?.outcome, .failed)
+        XCTAssertEqual(audit.records.last?.checkRunScope, AuditRecord.CheckRunScope(
+            checkableCount: 1,
+            succeededCount: 0,
+            failedCount: 1,
+            skippedCount: 0
+        ))
     }
 
     func testIdentityChangeDiscardsObservationInsteadOfRebindingPath() async throws {
@@ -151,13 +275,19 @@ final class CheckRunTests: XCTestCase {
             ),
             remoteTipSHA: "other-tip"
         )
+        let persistence = Persistence(directoryURL: temporaryDirectory)
         let registry = AppRegistry(
-            persistence: Persistence(directoryURL: temporaryDirectory),
+            persistence: persistence,
             personalRoots: []
         )
         _ = await registry.load()
         let client = FakeGitClient(factsAfterFetch: [path: changedFacts])
-        let runner = CheckRunner(gitInspector: client, gitExecutor: client, registry: registry)
+        let runner = CheckRunner(
+            gitInspector: client,
+            gitExecutor: client,
+            registry: registry,
+            audit: AuditEvidence(persistence: persistence)
+        )
 
         let events = await collect(runner.startCheck(scope: [CheckRunTarget(sourceKey: sourceKey, facts: initialFacts)]))
 
@@ -181,9 +311,15 @@ final class CheckRunTests: XCTestCase {
             ],
             fetchFailures: [failedPath]
         )
-        let registry = AppRegistry(persistence: Persistence(directoryURL: temporaryDirectory), personalRoots: [])
+        let persistence = Persistence(directoryURL: temporaryDirectory)
+        let registry = AppRegistry(persistence: persistence, personalRoots: [])
         _ = await registry.load()
-        let runner = CheckRunner(gitInspector: client, gitExecutor: client, registry: registry)
+        let runner = CheckRunner(
+            gitInspector: client,
+            gitExecutor: client,
+            registry: registry,
+            audit: AuditEvidence(persistence: persistence)
+        )
 
         let events = await collect(runner.startCheck(scope: [
             CheckRunTarget(sourceKey: sourceKey, facts: facts(path: successPath)),
@@ -193,6 +329,14 @@ final class CheckRunTests: XCTestCase {
         XCTAssertEqual(events.last, .finished(CheckRunSummary(
             outcome: .partial, succeeded: 1, failed: 1, skipped: 0
         )))
+        let audit = await persistence.loadAuditEvidence()
+        XCTAssertEqual(audit.records.last?.outcome, .partial)
+        XCTAssertEqual(audit.records.last?.checkRunScope, AuditRecord.CheckRunScope(
+            checkableCount: 2,
+            succeededCount: 1,
+            failedCount: 1,
+            skippedCount: 0
+        ))
     }
 
     private func collect(_ stream: AsyncStream<CheckRunEvent>) async -> [CheckRunEvent] {
