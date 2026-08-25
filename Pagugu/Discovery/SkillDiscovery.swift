@@ -2,9 +2,10 @@ import Foundation
 
 // L3 COORD: Pagugu/Discovery/SkillDiscovery.swift
 // POS: Discovery 模块（ADR-0009 §2）。owns Discovery Scan：遍历 Scan Root、软链接解析、
-//      Canonical Path 去重防环、SKILL.md 解析校验、Scan Issue。does not own 身份归因（归 Identity）。
+//      发现入口标注、Canonical Path 去重防环、SKILL.md 解析校验、Scan Issue。
+//      does not own 身份归因（归 Identity）。
 // TEST: repo://PaguguTests/DiscoveryTests.swift（scratch 扫描测试）。
-// IN: Personal Skill Root 路径列表；OUT: ScanResult（skills + issues + outcome）。
+// IN: Personal 与 Project Scan Root 路径列表；OUT: ScanResult（skills + issues + outcome）。
 
 /// Discovery Scan 的产物状态（#3 resolution §8）。
 enum ScanOutcome: Sendable {
@@ -19,6 +20,11 @@ struct ScanIssue: Sendable, Equatable {
     let reason: String
 }
 
+enum DiscoveryOrigin: Sendable, Equatable {
+    case personalSkillRoot
+    case projectScanRoot
+}
+
 /// Discovery Scan 发现的一个候选 Skill（未归因，只产出事实）。
 struct DiscoveredSkill: Sendable, Equatable {
     /// as-found 路径（展示用）。
@@ -27,6 +33,20 @@ struct DiscoveredSkill: Sendable, Equatable {
     let canonicalPath: String
     /// 目录名（展示元数据，不参与身份）。
     let name: String
+    /// 发现入口。Identity 用它区分安装投影与纯来源 Skill。
+    let origin: DiscoveryOrigin
+
+    init(
+        asFoundPath: String,
+        canonicalPath: String,
+        name: String,
+        origin: DiscoveryOrigin = .personalSkillRoot
+    ) {
+        self.asFoundPath = asFoundPath
+        self.canonicalPath = canonicalPath
+        self.name = name
+        self.origin = origin
+    }
 }
 
 /// Discovery Scan 的完整产出。
@@ -64,6 +84,7 @@ enum Discovery {
             scanDirectory(
                 root,
                 asFoundRoot: root,
+                origin: .personalSkillRoot,
                 canonicals: &canonicals,
                 skills: &skills,
                 issues: &issues,
@@ -94,6 +115,7 @@ enum Discovery {
         scanDirectory(
             root,
             asFoundRoot: root,
+            origin: .projectScanRoot,
             canonicals: &canonicals,
             skills: &skills,
             issues: &issues,
@@ -104,28 +126,57 @@ enum Discovery {
         return ScanResult(outcome: outcome, skills: skills, issues: issues)
     }
 
+    /// 一次完整 Discovery Scan：Personal Skill Root 与全部持久 Project Scan Root 共用同一产物。
+    static func scanAll(personalRoots: [String], projectRoots: [String]) -> ScanResult {
+        let personalResult = scanPersonalRoots(personalRoots)
+        let projectResults = projectRoots.map(scanProjectRoot)
+        let results = [personalResult] + projectResults
+        let hasIncompleteResult = results.contains { result in
+            switch result.outcome {
+            case .complete: false
+            case .partial, .failed: true
+            }
+        }
+        let allProjectRootsFailed = !projectResults.isEmpty && projectResults.allSatisfy { result in
+            if case .failed = result.outcome { return true }
+            return false
+        }
+        let outcome: ScanOutcome = personalRoots.isEmpty && allProjectRootsFailed
+            ? .failed
+            : (hasIncompleteResult ? .partial : .complete)
+        return ScanResult(
+            outcome: outcome,
+            skills: results.flatMap(\.skills),
+            issues: results.flatMap(\.issues)
+        )
+    }
+
     // MARK: - 递归遍历
 
     private static func scanDirectory(
         _ path: String,
         asFoundRoot: String,
+        origin: DiscoveryOrigin,
         canonicals: inout Set<String>,
         skills: inout [DiscoveredSkill],
         issues: inout [ScanIssue],
         partial: inout Bool
     ) {
         let fm = FileManager.default
+        let canonical = resolveCanonical(path)
+        guard canonicals.insert(canonical).inserted else {
+            return
+        }
         let skillMD = (path as NSString).appendingPathComponent("SKILL.md")
 
         if fm.fileExists(atPath: skillMD) {
             // 命中 Skill：解析 frontmatter，叶子停止
-            let canonical = resolveCanonical(path)
-            if canonicals.contains(canonical) {
-                return // Canonical Path 去重
-            }
-            canonicals.insert(canonical)
-
-            if let skill = parseSkillMD(at: skillMD, asFoundPath: path, canonicalPath: canonical) {
+            if let skill = parseSkillMD(
+                at: skillMD,
+                asFoundPath: path,
+                canonicalPath: canonical,
+                origin: origin
+            ) {
                 skills.append(skill)
             } else {
                 issues.append(ScanIssue(path: path, reason: "SKILL.md 不可解析（frontmatter 缺失或格式错误）"))
@@ -161,6 +212,7 @@ enum Discovery {
             scanDirectory(
                 childPath,
                 asFoundRoot: asFoundRoot,
+                origin: origin,
                 canonicals: &canonicals,
                 skills: &skills,
                 issues: &issues,
@@ -180,7 +232,12 @@ enum Discovery {
 
     /// 解析顶层精确 `SKILL.md`：校验 YAML frontmatter 的 `name` 和 `description` 字段。
     /// 无 frontmatter 或字段缺失记为 Scan Issue（不可解析）。
-    private static func parseSkillMD(at path: String, asFoundPath: String, canonicalPath: String) -> DiscoveredSkill? {
+    private static func parseSkillMD(
+        at path: String,
+        asFoundPath: String,
+        canonicalPath: String,
+        origin: DiscoveryOrigin
+    ) -> DiscoveredSkill? {
         guard let content = try? String(contentsOfFile: path, encoding: .utf8) else {
             return nil
         }
@@ -218,7 +275,8 @@ enum Discovery {
         return DiscoveredSkill(
             asFoundPath: asFoundPath,
             canonicalPath: canonicalPath,
-            name: asFoundName
+            name: asFoundName,
+            origin: origin
         )
     }
 }

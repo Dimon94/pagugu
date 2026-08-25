@@ -84,6 +84,26 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertEqual(Set(result.skills.map(\.canonicalPath)), [real.path])
     }
 
+    func testDirectorySymlinkCycleStopsWithoutIssue() throws {
+        let root = tmp.appendingPathComponent("skills")
+        let nested = root.appendingPathComponent("nested")
+        try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(
+            at: nested.appendingPathComponent("back-to-root"),
+            withDestinationURL: root
+        )
+
+        let result = Discovery.scanProjectRoot(root.path)
+
+        XCTAssertTrue(result.skills.isEmpty)
+        XCTAssertTrue(result.issues.isEmpty)
+        if case .complete = result.outcome {
+            // 预期结果
+        } else {
+            XCTFail("目录软链接环应安全结束")
+        }
+    }
+
     // MARK: - 不可解析 SKILL.md = Scan Issue
 
     func testUnparseableSkillMDRecordsScanIssue() throws {

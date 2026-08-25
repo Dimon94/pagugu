@@ -1,15 +1,18 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 // L3 COORD: Pagugu/Views/ContentView.swift
 // POS: 主窗口内容（Variant F 主从结构的 #15 简化版）。
 //      左侧：平铺 Skill 目录行（宿主 logo 槽位点亮/灰显）；
-//      右侧：欢迎引导或详情；Registry 加载与受限恢复时由全窗口门面接管。
+//      右侧：欢迎引导或详情；工具栏管理 Project Scan Root；Registry 故障由全窗口门面接管。
 // TEST: repo://PaguguTests/AppModelTests.swift（AppModel 正常/阻断投影 smoke）。
 
 struct ContentView: View {
     @ObservedObject var model: AppModel
     @State private var selectedEntryID: SkillIdentity?
+    @State private var showsProjectScanRoots = false
+    @State private var showsProjectRootImporter = false
 
     var body: some View {
         Group {
@@ -26,6 +29,48 @@ struct ContentView: View {
         .frame(minWidth: 860, minHeight: 560)
         .task {
             await model.start()
+        }
+        .fileImporter(
+            isPresented: $showsProjectRootImporter,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            guard case .success(let urls) = result, let url = urls.first else { return }
+            let hasSecurityScopedAccess = url.startAccessingSecurityScopedResource()
+            Task {
+                defer {
+                    if hasSecurityScopedAccess {
+                        url.stopAccessingSecurityScopedResource()
+                    }
+                }
+                await model.addProjectScanRoot(url)
+            }
+        }
+        .fileDialogMessage("选择一个项目父目录。Pagugu 会递归发现其中的 Skill。")
+        .fileDialogConfirmationLabel("添加扫描范围")
+        .sheet(isPresented: $showsProjectScanRoots) {
+            ProjectScanRootManagementView(
+                roots: model.readModel.projectScanRoots,
+                add: { showsProjectRootImporter = true },
+                remove: { canonicalPath in
+                    await model.removeProjectScanRoot(canonicalPath: canonicalPath)
+                }
+            )
+        }
+        .alert(
+            "无法保存 App Registry",
+            isPresented: Binding(
+                get: { model.projectScanRootError != nil },
+                set: { isPresented in
+                    if !isPresented { model.clearProjectScanRootError() }
+                }
+            )
+        ) {
+            Button("好") {
+                model.clearProjectScanRootError()
+            }
+        } message: {
+            Text(model.projectScanRootError?.reason ?? "Unknown")
         }
     }
 
@@ -44,9 +89,90 @@ struct ContentView: View {
                let entry = model.readModel.entries.first(where: { $0.id == selectedID }) {
                 SkillInfoPanel(entry: entry)
             } else {
-                WelcomePanel()
+                WelcomePanel {
+                    showsProjectRootImporter = true
+                }
             }
         }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("扫描范围", systemImage: "folder.badge.gearshape") {
+                    showsProjectScanRoots = true
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Project Scan Root 管理
+
+private struct ProjectScanRootManagementView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let roots: [ProjectScanRoot]
+    let add: () -> Void
+    let remove: (String) async -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("扫描范围")
+                    .font(.title2.bold())
+                Spacer()
+                Button("关闭") {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+
+            if roots.isEmpty {
+                ContentUnavailableView(
+                    "尚未添加 Project Scan Root",
+                    systemImage: "folder.badge.plus",
+                    description: Text("添加项目父目录后，Pagugu 会保存顺序并执行一次完整 Discovery Scan。")
+                )
+            } else {
+                List(roots) { root in
+                    HStack(spacing: 12) {
+                        Image(systemName: root.isAvailable ? "folder" : "folder.badge.questionmark")
+                            .foregroundStyle(root.isAvailable ? Color.secondary : Color.orange)
+                            .accessibilityHidden(true)
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(root.asFoundPath)
+                                .font(.body.monospaced())
+                                .textSelection(.enabled)
+                            if let reason = root.unavailableReason {
+                                Text("不可用：\(reason)。路径恢复后会自动复活。")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+
+                        Spacer()
+
+                        Button("删除", systemImage: "trash", role: .destructive) {
+                            Task { await remove(root.canonicalPath) }
+                        }
+                        .labelStyle(.iconOnly)
+                        .accessibilityLabel("删除扫描范围 \(root.asFoundPath)")
+                    }
+                }
+            }
+
+            HStack {
+                Text("删除只移除主张记录，不会触碰目录、Skill Source 或 Git 工作树。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("添加 Project Scan Root", systemImage: "plus") {
+                    add()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 660, minHeight: 420)
     }
 }
 
@@ -259,12 +385,19 @@ private struct SkillInfoPanel: View {
 // MARK: - 欢迎引导
 
 private struct WelcomePanel: View {
+    let addProjectScanRoot: () -> Void
+
     var body: some View {
-        ContentUnavailableView(
-            "欢迎使用 Pagugu",
-            systemImage: "shippingbox",
-            description: Text("Pagugu 自动发现三个 Personal Skill Root 下的 Skill。\n从左侧目录选择一个 Skill 查看详情，或添加 Project Scan Root 扩展扫描范围。")
-        )
+        ContentUnavailableView {
+            Label("欢迎使用 Pagugu", systemImage: "shippingbox")
+        } description: {
+            Text("Pagugu 自动发现三个 Personal Skill Root 下的 Skill。\n从左侧目录选择一个 Skill 查看详情，或添加 Project Scan Root 扩展扫描范围。")
+        } actions: {
+            Button("添加 Project Scan Root", systemImage: "folder.badge.plus") {
+                addProjectScanRoot()
+            }
+            .buttonStyle(.borderedProminent)
+        }
     }
 }
 
