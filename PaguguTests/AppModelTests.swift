@@ -221,11 +221,12 @@ final class AppModelTests: XCTestCase {
                 ("dirty", [.dirty]),
                 ("missing-cards", []),
             ],
-            unattributedNames: ["copy"]
+            unattributedNames: ["copy"],
+            invalidMappingPaths: ["/mapped-copy"]
         )
         XCTAssertEqual(
             directoryRootNames(in: mixedRoots),
-            ["dirty", "missing-cards", "copy", "update"]
+            ["dirty", "missing-cards", "mapped-copy", "copy", "update"]
         )
     }
 
@@ -552,10 +553,12 @@ final class AppModelTests: XCTestCase {
     func testTwoCheckoutsOfSameRemoteStaySeparateAndUnobservedIsCheckUnknown() async throws {
         let repoA = tmp.appendingPathComponent("repo-a")
         let repoB = tmp.appendingPathComponent("repo-b")
+        let copy = tmp.appendingPathComponent(".claude/skills/helper-copy")
         try makeWorkTree(at: repoA)
         try makeWorkTree(at: repoB)
         try writeSkill(at: repoA.appendingPathComponent("skills/helper"), name: "helper")
         try writeSkill(at: repoB.appendingPathComponent("skills/helper"), name: "helper")
+        try writeCopySkill(at: copy, frontmatterName: "helper-copy")
         let remoteURL = "https://example.com/team/skills.git"
         let facts = [
             repoA.path: checkoutFacts(path: repoA.path, remoteURL: remoteURL),
@@ -566,7 +569,7 @@ final class AppModelTests: XCTestCase {
             ),
         ]
         let model = AppModel(
-            personalRoots: [repoA.path, repoB.path],
+            personalRoots: [repoA.path, repoB.path, tmp.appendingPathComponent(".claude/skills").path],
             persistence: Persistence(directoryURL: tmp.appendingPathComponent("data")),
             gitInspector: FakeGitInspector(factsByPath: facts)
         )
@@ -583,6 +586,22 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(cards.first { $0.id == repoA.path }?.state, .checkUnknown)
         XCTAssertEqual(cards.first { $0.id == repoB.path }?.state, .detached)
         XCTAssertEqual(cards.first { $0.id == repoA.path }?.facts.originRemoteURL, remoteURL)
+
+        let target = try XCTUnwrap(source.skills.first?.id)
+        let created = await model.createSourceMapping(
+            installationCanonicalPath: copy.path,
+            targetIdentity: target
+        )
+        XCTAssertTrue(created)
+        let mappedSource = try XCTUnwrap(model.readModel.sourceItem(for: source.id))
+        XCTAssertEqual(Set(mappedSource.checkouts.map(\.canonicalPath)), [repoA.path, repoB.path])
+        XCTAssertTrue(mappedSource.skills.first?.installations.contains {
+            $0.canonicalPath == copy.path && $0.isManuallyMapped
+        } == true)
+        let mappedCards = model.readModel.checkoutCards(for: source.id)
+        XCTAssertEqual(Set(mappedCards.map(\.id)), [repoA.path, repoB.path])
+        XCTAssertEqual(mappedCards.first { $0.id == repoA.path }?.state, .checkUnknown)
+        XCTAssertEqual(mappedCards.first { $0.id == repoB.path }?.state, .detached)
     }
 
     @MainActor
@@ -668,7 +687,8 @@ final class AppModelTests: XCTestCase {
 
     private func makeDirectoryReadModel(
         _ rows: [(name: String, states: [CheckoutGitState])],
-        unattributedNames: [String] = []
+        unattributedNames: [String] = [],
+        invalidMappingPaths: [String] = []
     ) -> SkillReadModel {
         let sources = rows.map { row in
             let key = SkillSourceKey.remoteURL("example.com/\(row.name)")
@@ -705,6 +725,16 @@ final class AppModelTests: XCTestCase {
                     installations: []
                 )
             },
+            invalidMappings: invalidMappingPaths.map {
+                SourceMappingProjection(
+                    installationCanonicalPath: $0,
+                    targetIdentity: SkillIdentity(
+                        sourceKey: .localPath("/missing-source"),
+                        repositoryRelativePath: "missing-skill"
+                    ),
+                    validity: .invalid(.sourceNotFound)
+                )
+            },
             issues: [],
             scanOutcome: .complete,
             checkoutCardsBySource: cards
@@ -718,6 +748,8 @@ final class AppModelTests: XCTestCase {
                 return readModel.sourceItem(for: key)?.displayName
             case .unattributedInstallation(let id):
                 return readModel.unattributedItem(for: id)?.displayName
+            case .invalidMapping(let path):
+                return URL(fileURLWithPath: path).lastPathComponent
             case .skill:
                 return nil
             }
@@ -760,5 +792,172 @@ final class AppModelTests: XCTestCase {
         func inspectCheckout(at checkoutPath: String, scope: GitInspectionScope) async -> CheckoutGitFacts {
             scope == .localOnly && fetchCount == 0 ? initial : checked
         }
+    }
+
+    // MARK: - 人工来源映射（#25）
+
+    @MainActor
+    func testCrossHostGroupedMappingsInvalidateReviveAndDeletePerInstallation() async throws {
+        let claudeSkill = tmp.appendingPathComponent(".claude/skills/helper")
+        let codexSkill = tmp.appendingPathComponent(".codex/skills/helper")
+        try writeCopySkill(at: claudeSkill, frontmatterName: "helper")
+        try writeCopySkill(at: codexSkill, frontmatterName: "helper")
+
+        let repository = tmp.appendingPathComponent("repository")
+        try makeWorkTree(at: repository)
+        let source = repository.appendingPathComponent("skills/source")
+        try writeSkill(at: source, name: "source")
+
+        let model = makeModel(personalRoots: [
+            tmp.appendingPathComponent(".claude/skills").path,
+            tmp.appendingPathComponent(".codex/skills").path,
+        ])
+        await model.start()
+        await model.addProjectScanRoot(repository)
+
+        let target = try XCTUnwrap(model.readModel.mappingTargets.first)
+        let grouped = try XCTUnwrap(model.readModel.unattributedInstallations.first)
+        XCTAssertEqual(grouped.installations.count, 2)
+        for path in [claudeSkill.path, codexSkill.path] {
+            let created = await model.createSourceMapping(
+                installationCanonicalPath: path,
+                targetIdentity: target.id
+            )
+            XCTAssertTrue(created)
+        }
+        XCTAssertTrue(model.readModel.unattributedInstallations.isEmpty)
+        XCTAssertEqual(
+            model.readModel.skillEntry(for: target.id)?.installations.filter(\.isManuallyMapped).count,
+            2
+        )
+
+        try fm.removeItem(at: source.appendingPathComponent("SKILL.md"))
+        await model.rescan()
+        XCTAssertEqual(model.readModel.invalidMappings.count, 2)
+        XCTAssertTrue(model.readModel.invalidMappings.allSatisfy {
+            $0.validity == .invalid(.skillNotFound)
+        })
+        XCTAssertEqual(model.readModel.unattributedInstallations.first?.installations.count, 2)
+
+        try writeSkill(at: source, name: "source")
+        await model.rescan()
+        XCTAssertTrue(model.readModel.invalidMappings.isEmpty)
+        XCTAssertTrue(model.readModel.unattributedInstallations.isEmpty)
+
+        await model.removeProjectScanRoot(canonicalPath: repository.path)
+        XCTAssertEqual(model.readModel.invalidMappings.count, 2)
+        XCTAssertTrue(model.readModel.invalidMappings.allSatisfy {
+            $0.validity == .invalid(.sourceNotFound)
+        })
+        XCTAssertEqual(model.readModel.unattributedInstallations.first?.installations.count, 2)
+
+        await model.addProjectScanRoot(repository)
+        XCTAssertTrue(model.readModel.invalidMappings.isEmpty)
+        XCTAssertTrue(model.readModel.unattributedInstallations.isEmpty)
+
+        let deletedClaude = await model.deleteSourceMapping(installationCanonicalPath: claudeSkill.path)
+        XCTAssertTrue(deletedClaude)
+        XCTAssertEqual(
+            model.readModel.unattributedInstallations.first?.installations.map(\.canonicalPath),
+            [claudeSkill.path]
+        )
+        let deletedCodex = await model.deleteSourceMapping(installationCanonicalPath: codexSkill.path)
+        XCTAssertTrue(deletedCodex)
+        XCTAssertEqual(model.readModel.unattributedInstallations.first?.installations.count, 2)
+        XCTAssertTrue(fm.fileExists(atPath: claudeSkill.path))
+        XCTAssertTrue(fm.fileExists(atPath: codexSkill.path))
+    }
+
+    @MainActor
+    func testSourceMappingMovesCopyIntoSourceAndSurvivesRestart() async throws {
+        let personalRoot = tmp.appendingPathComponent("personal/skills")
+        let copy = personalRoot.appendingPathComponent("copy-name")
+        try writeSkill(at: copy, name: "copy-name")
+        let repository = tmp.appendingPathComponent("repository")
+        try makeWorkTree(at: repository)
+        try writeSkill(at: repository.appendingPathComponent("skills/source-name"), name: "source-name")
+        let dataDirectory = tmp.appendingPathComponent("data")
+        let model = AppModel(
+            personalRoots: [personalRoot.path],
+            persistence: Persistence(directoryURL: dataDirectory)
+        )
+        await model.start()
+        await model.addProjectScanRoot(repository)
+
+        let target = try XCTUnwrap(model.readModel.mappingTargets.first)
+        let created = await model.createSourceMapping(
+            installationCanonicalPath: copy.path,
+            targetIdentity: target.id
+        )
+        XCTAssertTrue(created)
+        XCTAssertTrue(model.readModel.unattributedInstallations.isEmpty)
+
+        let restarted = AppModel(
+            personalRoots: [personalRoot.path],
+            persistence: Persistence(directoryURL: dataDirectory)
+        )
+        await restarted.start()
+        XCTAssertTrue(restarted.readModel.unattributedInstallations.isEmpty)
+        XCTAssertTrue(restarted.readModel.skillEntry(for: target.id)?
+            .installations.contains(where: { $0.canonicalPath == copy.path && $0.isManuallyMapped }) == true)
+    }
+
+    @MainActor
+    func testSourceMappingRejectsStaleInstallationAndTargetWithStableReasons() async throws {
+        let personalRoot = tmp.appendingPathComponent("personal/skills")
+        let copy = personalRoot.appendingPathComponent("copy")
+        try writeSkill(at: copy, name: "copy")
+        let model = makeModel(personalRoots: [personalRoot.path])
+        await model.start()
+        let unavailableTarget = SkillIdentity(
+            sourceKey: .localPath("/missing/repository"),
+            repositoryRelativePath: "skills/missing"
+        )
+
+        let missingInstallation = await model.createSourceMapping(
+            installationCanonicalPath: "/missing/installation",
+            targetIdentity: unavailableTarget
+        )
+        XCTAssertFalse(missingInstallation)
+        XCTAssertEqual(model.sourceMappingError, .installationUnavailable)
+
+        let missingTarget = await model.createSourceMapping(
+            installationCanonicalPath: copy.path,
+            targetIdentity: unavailableTarget
+        )
+        XCTAssertFalse(missingTarget)
+        XCTAssertEqual(model.sourceMappingError, .targetUnavailable)
+    }
+
+    @MainActor
+    func testIncompleteScanDoesNotMarkMappingInvalidAndDeleteOnlyRemovesClaim() async throws {
+        let personalRoot = tmp.appendingPathComponent("personal/skills")
+        let copy = personalRoot.appendingPathComponent("copy")
+        try writeSkill(at: copy, name: "copy")
+        let repository = tmp.appendingPathComponent("repository")
+        try makeWorkTree(at: repository)
+        try writeSkill(at: repository.appendingPathComponent("source"), name: "source")
+        let model = makeModel(personalRoots: [personalRoot.path])
+        await model.start()
+        await model.addProjectScanRoot(repository)
+        let target = try XCTUnwrap(model.readModel.mappingTargets.first)
+        let created = await model.createSourceMapping(
+            installationCanonicalPath: copy.path,
+            targetIdentity: target.id
+        )
+        XCTAssertTrue(created)
+
+        try fm.removeItem(at: repository)
+        await model.rescan()
+        XCTAssertTrue(model.readModel.invalidMappings.isEmpty)
+        let unverified = model.readModel.unattributedInstallations
+            .flatMap(\.installations)
+            .first { $0.canonicalPath == copy.path }
+        XCTAssertEqual(unverified?.sourceMapping?.validity, .unverified)
+
+        let deleted = await model.deleteSourceMapping(installationCanonicalPath: copy.path)
+        XCTAssertTrue(deleted)
+        XCTAssertNil(model.readModel.unattributedInstallations.first?.installations.first?.sourceMapping)
+        XCTAssertTrue(fm.fileExists(atPath: copy.path))
     }
 }

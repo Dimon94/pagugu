@@ -1,10 +1,10 @@
 import Foundation
 
 // L3 COORD: Pagugu/Identity/SkillDirectoryEntry.swift
-// POS: Identity 模块（纯函数，ADR-0009 §2）。owns Skill 目录条目聚合、来源分组与
-//      复制投影呈现组的值类型（ADR-0001 §3：列表条目 = Skill；§4：内容指纹一致的
-//      复制安装聚合为只读呈现组；Variant F：仓库行只是呈现分组）。
-// TEST: repo://PaguguTests/IdentityTests.swift（分组聚合表测试）。
+// POS: Identity 模块（纯函数，ADR-0009 §2）。owns Skill 目录条目、来源/检出分组、
+//      复制投影呈现组与逐 Installation 来源映射投影的值类型（ADR-0001 §3-4）。
+//      映射不拥有 Skill Source、Checkout 或 Git 状态事实。
+// TEST: repo://PaguguTests/IdentityTests.swift（分组、指纹与映射投影表测试）。
 
 /// Projection Type（CONTEXT.md）：Skill Installation 的形态分类。
 enum ProjectionType: String, Hashable, Sendable {
@@ -31,6 +31,21 @@ struct SkillInstallation: Hashable, Sendable {
     let canonicalPath: String
     let hosts: Set<AgentHost>
     let projectionType: ProjectionType
+    /// 只存在于复制投影；记录仍由 Registry owns。
+    let sourceMapping: SourceMappingProjection?
+
+    var isManuallyMapped: Bool {
+        sourceMapping?.validity == .valid
+    }
+}
+
+/// 一条来源映射在当前 Scan Result 下的纯函数投影。
+struct SourceMappingProjection: Identifiable, Hashable, Sendable {
+    var id: String { installationCanonicalPath }
+
+    let installationCanonicalPath: String
+    let targetIdentity: SkillIdentity
+    let validity: SourceMappingValidity
 }
 
 /// 一条 Skill 目录条目（Skill Identity + 聚合属性）。身份与去重的 canonical 条目。
@@ -90,4 +105,6 @@ struct UnattributedInstallationItem: Identifiable, Hashable, Sendable {
 struct SkillDirectoryContents: Sendable {
     let sources: [SkillSourceItem]
     let unattributedInstallations: [UnattributedInstallationItem]
+    let mappingTargets: [SkillDirectoryEntry]
+    let invalidMappings: [SourceMappingProjection]
 }

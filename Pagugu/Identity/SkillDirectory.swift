@@ -3,9 +3,9 @@ import Foundation
 // L3 COORD: Pagugu/Identity/SkillDirectory.swift
 // POS: Identity 模块（纯函数，ADR-0009 §2）。owns 按 Skill Identity 聚合 Installation、
 //      按 Skill Source 分组目录（Variant F：来源仓库行 + 无仓库可归行）、
-//      复制投影按内容指纹聚合呈现组。
-// TEST: repo://PaguguTests/IdentityTests.swift（分组聚合表测试）。
-// IN: ScanResult（含 Discovery Origin）+ 每个候选检出根的实时 Git Fact；
+//      同一 remote 多检出保留、复制投影指纹呈现组与人工来源映射事实投影。
+// TEST: repo://PaguguTests/IdentityTests.swift（分组、检出与映射生命周期表测试）。
+// IN: ScanResult + 每个候选检出根的实时 Git Fact + Registry 来源映射主张；
 // OUT: SkillDirectoryContents（Skill Read Model 消费）。
 
 enum SkillDirectory {
@@ -14,19 +14,13 @@ enum SkillDirectory {
         var entriesByIdentity: [SkillIdentity: SkillDirectoryEntry] = [:]
     }
 
-    /// 将 Discovery Scan 的结果聚合为 Variant F 目录：
-    /// - 工作树内的 Skill 按 Skill Source Key（仓库根 canonical 路径）分组为来源仓库行，
-    ///   同一 canonical path 的多个 as-found 入口聚合为一个 Skill 的多个 Installation（ADR-0001 §3）；
-    /// - 不在任何工作树内的复制投影：内容指纹一致才聚合为一个只读呈现组，
-    ///   内容不同或指纹缺失（读取不完整）按安装 Canonical Path 各自单列（ADR-0001 §4，#16 修正）；
-    ///   零 Installation 的纯来源发现（Project Scan Root 内无宿主可归）永不合并、按自身路径单列。
-    /// Installation 产生规则（#18）：Personal Skill Root 入口或带宿主归因的 as-found 路径
-    /// 才产生 Installation；指纹只用于复制投影之间的呈现聚合，永不用于来源归因。
+    /// 将 Discovery Scan 聚合为 Variant F 目录。Git Fact 只决定 Source Key；
+    /// 映射只把复制 Installation 投影到既有 Skill Identity，不改变来源或检出事实。
     static func contents(
         from result: ScanResult,
-        gitFactsByCheckoutPath: [String: CheckoutGitFacts] = [:]
+        gitFactsByCheckoutPath: [String: CheckoutGitFacts] = [:],
+        mappings: [String: SourceMappingRecord] = [:]
     ) -> SkillDirectoryContents {
-        // 第一遍：按 canonical path 聚合 Installation（同一物理目录的多个 as-found 入口）
         var byCanonical: [String: (name: String, repositoryRoot: String?, fingerprint: String?, installations: [SkillInstallation])] = [:]
 
         for skill in result.skills {
@@ -47,43 +41,83 @@ enum SkillDirectory {
             }
         }
 
-        // 第二遍：按工作树根分组为来源仓库行；复制投影按内容指纹聚合呈现组
         var sourcesByKey: [SkillSourceKey: SourceAccumulator] = [:]
         var unattributedByGroup: [String: (name: String, representativeCanonical: String, installations: [SkillInstallation])] = [:]
 
         for (canonicalPath, value) in byCanonical {
+            guard let root = value.repositoryRoot else { continue }
+            let key = sourceKey(checkoutPath: root, facts: gitFactsByCheckoutPath[root])
+            let relativePath = canonicalPath == root
+                ? ""
+                : String(canonicalPath.dropFirst(root.count + 1))
+            let identity = SkillIdentity(sourceKey: key, repositoryRelativePath: relativePath)
             let installations = value.installations.sorted { $0.asFoundPath < $1.asFoundPath }
-            if let root = value.repositoryRoot {
-                let sourceKey = sourceKey(
-                    checkoutPath: root,
-                    facts: gitFactsByCheckoutPath[root]
+            var source = sourcesByKey[key] ?? SourceAccumulator()
+            source.checkoutsByPath[root] = SkillSourceCheckout(canonicalPath: root)
+            if let existing = source.entriesByIdentity[identity] {
+                source.entriesByIdentity[identity] = SkillDirectoryEntry(
+                    id: identity,
+                    displayName: existing.displayName,
+                    canonicalPath: min(existing.canonicalPath, canonicalPath),
+                    installations: (existing.installations + installations).sorted { $0.asFoundPath < $1.asFoundPath }
                 )
-                let relativePath = canonicalPath == root
-                    ? ""
-                    : String(canonicalPath.dropFirst(root.count + 1))
-                let identity = SkillIdentity(sourceKey: sourceKey, repositoryRelativePath: relativePath)
-                let entry = SkillDirectoryEntry(
+            } else {
+                source.entriesByIdentity[identity] = SkillDirectoryEntry(
                     id: identity,
                     displayName: value.name,
                     canonicalPath: canonicalPath,
                     installations: installations
                 )
-                var source = sourcesByKey[sourceKey] ?? SourceAccumulator()
-                source.checkoutsByPath[root] = SkillSourceCheckout(canonicalPath: root)
-                if let existing = source.entriesByIdentity[identity] {
-                    source.entriesByIdentity[identity] = SkillDirectoryEntry(
-                        id: identity,
-                        displayName: existing.displayName,
-                        canonicalPath: min(existing.canonicalPath, canonicalPath),
-                        installations: (existing.installations + installations).sorted { $0.asFoundPath < $1.asFoundPath }
-                    )
-                } else {
-                    source.entriesByIdentity[identity] = entry
-                }
-                sourcesByKey[sourceKey] = source
+            }
+            sourcesByKey[key] = source
+        }
+
+        let copyPaths = Set(byCanonical.compactMap { path, value in
+            value.repositoryRoot == nil && value.installations.contains { $0.projectionType == .copy }
+                ? path
+                : nil
+        })
+        let candidateRoots = result.candidateSourceRoots.union(result.skills.compactMap(\.repositoryRootPath))
+        let discoveredSourceKeys = Set(candidateRoots.map {
+            sourceKey(checkoutPath: $0, facts: gitFactsByCheckoutPath[$0])
+        })
+        let discoveredSkillIdentities = Set(sourcesByKey.values.flatMap { $0.entriesByIdentity.keys })
+        var projectionsByPath: [String: SourceMappingProjection] = [:]
+        for (path, record) in mappings {
+            guard let key = SkillSourceKey(registryValue: record.skillSourceKey) else { continue }
+            let identity = SkillIdentity(sourceKey: key, repositoryRelativePath: record.repositoryRelativePath)
+            projectionsByPath[path] = SourceMappingProjection(
+                installationCanonicalPath: path,
+                targetIdentity: identity,
+                validity: SourceMappingEvaluator.evaluate(
+                    installationCanonicalPath: path,
+                    targetIdentity: identity,
+                    scanOutcome: result.outcome,
+                    copyInstallationPaths: copyPaths,
+                    discoveredSourceKeys: discoveredSourceKeys,
+                    discoveredSkillIdentities: discoveredSkillIdentities
+                )
+            )
+        }
+
+        for (canonicalPath, value) in byCanonical where value.repositoryRoot == nil {
+            let projection = projectionsByPath[canonicalPath]
+            let installations = value.installations
+                .map { installation($0, sourceMapping: projection) }
+                .sorted { $0.asFoundPath < $1.asFoundPath }
+
+            if projection?.validity == .valid,
+               let target = projection?.targetIdentity,
+               var source = sourcesByKey[target.sourceKey],
+               let entry = source.entriesByIdentity[target] {
+                source.entriesByIdentity[target] = SkillDirectoryEntry(
+                    id: entry.id,
+                    displayName: entry.displayName,
+                    canonicalPath: entry.canonicalPath,
+                    installations: (entry.installations + installations).sorted { $0.asFoundPath < $1.asFoundPath }
+                )
+                sourcesByKey[target.sourceKey] = source
             } else {
-                // 有安装的复制投影才可合并（以内容指纹为键）；指纹缺失 fail closed 单列；
-                // 零安装的纯来源发现永不合并（身份即自身位置，内容一致不推断同一 Skill）
                 let mergeable = !installations.isEmpty
                 let groupKey = (mergeable ? value.fingerprint : nil).map { "sha256:" + $0 } ?? canonicalPath
                 if var group = unattributedByGroup[groupKey] {
@@ -134,7 +168,11 @@ enum SkillDirectory {
 
         return SkillDirectoryContents(
             sources: sources,
-            unattributedInstallations: unattributed
+            unattributedInstallations: unattributed,
+            mappingTargets: sources.flatMap(\.skills),
+            invalidMappings: projectionsByPath.values
+                .filter { if case .invalid = $0.validity { return true }; return false }
+                .sorted { $0.installationCanonicalPath < $1.installationCanonicalPath }
         )
     }
 
@@ -146,7 +184,21 @@ enum SkillDirectory {
             asFoundPath: skill.asFoundPath,
             canonicalPath: skill.canonicalPath,
             hosts: hosts,
-            projectionType: projectionType(of: skill)
+            projectionType: projectionType(of: skill),
+            sourceMapping: nil
+        )
+    }
+
+    private static func installation(
+        _ installation: SkillInstallation,
+        sourceMapping: SourceMappingProjection?
+    ) -> SkillInstallation {
+        SkillInstallation(
+            asFoundPath: installation.asFoundPath,
+            canonicalPath: installation.canonicalPath,
+            hosts: installation.hosts,
+            projectionType: installation.projectionType,
+            sourceMapping: sourceMapping
         )
     }
 
@@ -163,8 +215,6 @@ enum SkillDirectory {
         return remoteKey
     }
 
-    /// Projection Type 派生（ADR-0001 §4）：asFound 完全解析后与 canonical 不同 = 软链接；
-    /// 相同且在工作树内 = 仓库本体；相同且无工作树 = 复制。
     private static func projectionType(of skill: DiscoveredSkill) -> ProjectionType {
         let expanded = (skill.asFoundPath as NSString).expandingTildeInPath
         if expanded != skill.canonicalPath { return .symlink }

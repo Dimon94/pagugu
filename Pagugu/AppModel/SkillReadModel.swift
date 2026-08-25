@@ -1,8 +1,9 @@
 import Foundation
 
 // L3 COORD: Pagugu/AppModel/SkillReadModel.swift
-// POS: AppModel 模块（ADR-0009 §7）。owns Skill Read Model、Check Run 投影、目录状态短语与五档排序。
-// TEST: repo://PaguguTests/AppModelTests.swift（投影形状、Check Run、目录状态短语与排序表测试）。
+// POS: AppModel 模块（ADR-0009 §7）。owns Skill Read Model、来源映射投影、Check Run 投影、
+//      目录状态短语与五档排序。
+// TEST: repo://PaguguTests/AppModelTests.swift（投影形状、来源映射、Check Run、目录状态短语与排序表测试）。
 
 /// Skill Read Model：AppModel 发布的只读投影，View 只消费不重建。
 struct SkillReadModel: Sendable {
@@ -10,6 +11,10 @@ struct SkillReadModel: Sendable {
     let sources: [SkillSourceItem]
     /// 无仓库可归行（Unattributed Installation 以 Skill 本身为行；内容指纹一致的复制安装聚合）。
     let unattributedInstallations: [UnattributedInstallationItem]
+    /// 当前可选的已发现 Skill；人工映射只能指向其中一项。
+    let mappingTargets: [SkillDirectoryEntry]
+    /// 当前完整/部分扫描下判定为失效的持久映射投影。
+    let invalidMappings: [SourceMappingProjection]
     /// 扫描问题列表。
     let issues: [ScanIssue]
     /// 整体扫描状态。
@@ -25,6 +30,8 @@ struct SkillReadModel: Sendable {
         SkillReadModel(
             sources: [],
             unattributedInstallations: [],
+            mappingTargets: [],
+            invalidMappings: [],
             issues: [],
             scanOutcome: .complete,
             projectScanRoots: [],
@@ -35,6 +42,8 @@ struct SkillReadModel: Sendable {
     init(
         sources: [SkillSourceItem],
         unattributedInstallations: [UnattributedInstallationItem],
+        mappingTargets: [SkillDirectoryEntry] = [],
+        invalidMappings: [SourceMappingProjection] = [],
         issues: [ScanIssue],
         scanOutcome: ScanOutcome,
         projectScanRoots: [ProjectScanRoot] = [],
@@ -42,11 +51,13 @@ struct SkillReadModel: Sendable {
     ) {
         self.sources = sources
         self.unattributedInstallations = unattributedInstallations
+        self.mappingTargets = mappingTargets
+        self.invalidMappings = invalidMappings
         self.issues = issues
         self.scanOutcome = scanOutcome
         self.projectScanRoots = projectScanRoots
         self.checkoutCardsBySource = checkoutCardsBySource
-        self.isEmpty = sources.isEmpty && unattributedInstallations.isEmpty && issues.isEmpty
+        self.isEmpty = sources.isEmpty && unattributedInstallations.isEmpty && invalidMappings.isEmpty && issues.isEmpty
     }
 
     // L4 IN: 当前 Skill Read Model 与瞬态收起集合。
@@ -61,6 +72,17 @@ struct SkillReadModel: Sendable {
         }
         roots.append(contentsOf: unattributedInstallations.map {
             (.unattributedInstallation($0.id), 0, CheckoutGitState.allCases.count + 1, $0.displayName, $0.id)
+        })
+        let visibleMappingPaths = Set(unattributedInstallations.flatMap(\.installations).map(\.canonicalPath))
+        roots.append(contentsOf: invalidMappings.compactMap { mapping in
+            guard !visibleMappingPaths.contains(mapping.installationCanonicalPath) else { return nil }
+            return (
+                .invalidMapping(mapping.installationCanonicalPath),
+                0,
+                CheckoutGitState.allCases.count + 1,
+                mapping.installationCanonicalPath,
+                mapping.installationCanonicalPath
+            )
         })
         roots.sort {
             if $0.tier != $1.tier { return $0.tier < $1.tier }
@@ -148,6 +170,10 @@ struct SkillReadModel: Sendable {
     private static func statusPhrase(for state: CheckoutGitState) -> String {
         state == .noRemote ? "仅本地" : state.displayName
     }
+
+    func invalidMapping(for path: String) -> SourceMappingProjection? {
+        invalidMappings.first { $0.installationCanonicalPath == path }
+    }
 }
 
 /// Skill Read Model 中的一张逐检出卡片。主状态不覆盖正交事实。
@@ -183,4 +209,6 @@ enum SkillDirectoryNode: Hashable, Sendable {
     case skill(SkillIdentity)
     /// 无仓库可归行（值为条目稳定标识：内容指纹组或安装 Canonical Path）。
     case unattributedInstallation(String)
+    /// 当前扫描中已无对应复制 Installation 的失效映射主张。
+    case invalidMapping(String)
 }

@@ -1,17 +1,17 @@
 # Current System Map
 
-Status: runnable discovery、全量手动 Check Run、逐检出观察、12 态裁决与目录状态投影
+Status: runnable discovery、全量手动 Check Run、逐检出观察、12 态裁决、目录状态投影与 manual source mapping
 
 本文件描述当前可验证的系统边界。产品动机、目标用户与目标体验见 repo://docs/product/vision.md。规划中的 Skill 扫描和更新能力不冒充现状。
 
 ## 当前事实
 
 - 产品：Pagugu，本地 macOS Agent Skill 管理与安全同步应用。
-- 当前阶段：可运行发现目录、逐检出实时 Git Fact、全量手动 Check Run、观察单槽、12 态裁决、详情卡片、目录逐态短语/五档静默排序与 Project Scan Root 管理。
+- 当前阶段：可运行发现目录、逐检出实时 Git Fact、全量手动 Check Run、观察单槽、12 态裁决、详情卡片、目录逐态短语/五档静默排序、Project Scan Root 管理与复制 Installation 的人工来源映射。
 - 技术栈：原生 Xcode macOS App、SwiftUI、Swift 6、macOS 14+。
 - 运行入口：`Pagugu/App/PaguguApp.swift`；稳定本地入口为 `script/build_and_run.sh`。
 - 分发：本地构建；App Sandbox 关闭。签名、公证和 GitHub Releases 尚未实现。
-- 持久状态：Persistence actor 读写 `~/Library/Application Support/com.dimon.pagugu/registry.json`。Registry 已接通 Project Scan Root 主张与逐检出观察单槽；Check Run 瞬态不持久。
+- 持久状态：Persistence actor 读写 `~/Library/Application Support/com.dimon.pagugu/registry.json` 与物理独立的 `audit-history.json`。Registry 已接通 Project Scan Root、来源映射与逐检出观察单槽；Audit 已接通来源映射创建/删除记录；Check Run 瞬态不持久。
 - 外部系统：通过唯一 Git seam 调用本机 `git`，全部命令非交互、屏蔽仓库 hooks，且带单调时钟秒级 timeout；Check Run 只顺序 fetch。公开 GitHub 仓库只用于 Issues；本地代码尚未推送。
 
 ## 当前链路
@@ -25,9 +25,10 @@ Status: runnable discovery、全量手动 Check Run、逐检出观察、12 态�
       -> Registry 投影 Project Scan Root 可用性
       -> Discovery 扫描 Personal + Project Scan Root
       -> Git 逐候选检出 local-only inspection
-      -> Identity 以 Git origin 规范化 Source Key，聚合 Skill 且保留全部物理检出
+      -> Identity 以 Git origin 规范化 Source Key，聚合 Skill、保留全部物理检出并重验证来源映射
       -> Registry 读观察单槽；Eligibility 校验身份与新鲜度
       -> 新鲜成功观察触发 after-successful-check inspection 并按固定 precedence 裁决
+      -> Registry durable 来源映射 + Audit best-effort 证据
       -> AppModel 发布 Skill Read Model（逐态目录短语；需要处理 → 可更新 → 尚未检查 → 无需更新 → 仅本地）
       -> WindowGroup + MenuBarExtra
       -> ContentView / MenuBarView
@@ -37,17 +38,18 @@ Status: runnable discovery、全量手动 Check Run、逐检出观察、12 态�
 | Module | Owns | Does not own | Public interface | Depends on | Verification |
 | --- | --- | --- | --- | --- | --- |
 | PaguguApp | 应用生命周期、主窗口与状态栏场景 | Skill 扫描、Git 状态、持久化 | macOS App 入口 | SwiftUI、AppKit | `script/build_and_run.sh --verify` |
-| ContentView | 主窗口 Variant F IA；显示目录状态短语、唯一手动检查入口、进度/结果横幅与逐检出卡片；扫描范围管理与 Registry 故障阻断 | Skill Read Model 派生、Checkout Git State/Run 裁决、目录排序、IO | SwiftUI `View` | SwiftUI、AppModel | App build |
+| ContentView | 主窗口 Variant F IA；显示目录状态短语、唯一手动检查入口、进度/结果横幅与逐检出卡片；逐 Installation 来源映射、失效原因与删除确认；扫描范围管理与 Registry 故障阻断 | Skill Read Model 派生、Checkout Git State/Run 裁决、目录排序、IO | SwiftUI `View` | SwiftUI、AppModel | App build |
 | MenuBarView | 打开主窗口与退出动作 | 更新状态和后台调度 | SwiftUI `View` | SwiftUI、AppKit | App build + launch |
 | AppIdentity | 产品展示名、Bundle ID、主窗口 ID | 用户配置 | 静态常量 | Swift 标准库 | `PaguguTests.testProductIdentity` |
 | Discovery | Discovery Scan：遍历全部 Scan Root、发现入口标注、软链接解析、Canonical Path 去重防环、SKILL.md 解析校验与原文读取、Git 工作树根检测（`.git` 存在性）、复制投影内容指纹（SHA-256，fail closed）、Scan Issue | 身份归因与指纹聚合（归 Identity）、Git 子进程 | `Discovery.scanAll(personalRoots:projectRoots:)`、`scanPersonalRoots(_:)`、`scanProjectRoot(_:)`、`skillMarkdown(atCanonicalPath:)`、`contentFingerprint(ofSkillAtCanonicalPath:)` | Foundation、CryptoKit | `PaguguTests/DiscoveryTests.swift` |
-| Identity | Skill Source Key 规范化、归因与聚合、Skill Source Checkout、同一 remote 多检出保留（全部纯函数） | 文件系统遍历、Git 调用、状态裁决 | `SkillSourceKey.normalize(remoteURL:)`、`SkillDirectory.contents(from:gitFactsByCheckoutPath:)` | Foundation、Discovery/Git 值类型 | `PaguguTests/IdentityTests.swift`、`AppModelTests.swift` |
+| Identity | Skill Source Key 规范化、人工映射重验证、归因与聚合、Skill Source Checkout、同一 remote 多检出保留（全部纯函数） | 文件系统遍历、Git 调用、状态裁决与主张写入 | `SkillSourceKey.normalize(remoteURL:)`、`SkillDirectory.contents(from:gitFactsByCheckoutPath:mappings:)` | Foundation、Discovery/Git/Persistence 值类型 | `PaguguTests/IdentityTests.swift`、`AppModelTests.swift` |
 | Git | 唯一 Git 子进程 seam；非交互环境、timeout、exit/stderr 归一化；实时正交 Checkout Git Fact 与单 upstream 分支 fetch | Checkout Git State 与 Eligible Update 裁决、检查/更新编排 | `GitInspecting.inspectCheckout(at:scope:)`、`GitExecuting.fetch(remote:upstreamRef:at:)` | Foundation、本机 git | `PaguguTests/GitEligibilityTests.swift` |
 | Eligibility | 12 态固定 precedence、观察身份摘要与新鲜度裁决（纯函数） | Git 调用、持久化、UI | `evaluate(facts:sourceKey:)`、`identityDigest(facts:sourceKey:)`、`observationIsFresh(_:facts:sourceKey:)` | Git/Identity/Persistence 值类型 | `PaguguTests/GitEligibilityTests.swift`、`CheckRunTests.swift` |
-| Registry | Project Scan Root 串行 mutation、护栏与观察单槽 durable-first 替换 | registry.json 物理 IO、Discovery、Check Run 编排、UI | Project Scan Root 既有入口、`checkoutObservations()`、`recordCheckoutObservation(_:)` | Persistence、Foundation | `PaguguTests/RegistryTests.swift`、`CheckRunTests.swift` |
-| Persistence | registry.json 的物理 IO、v1 持久记录类型、兼容分发、双 fsync 原子写、quarantine、外部修改检测 | 三类主张与审计记录的业务语义、Git/Discovery/Eligibility | `loadRegistry()`、`saveRegistry(_:)`、`resetRegistry(confirmed:)` | Foundation、Darwin | `PaguguTests/PersistenceTests.swift` |
+| Registry | Project Scan Root 与来源映射串行 mutation、护栏、显式删除、当前主张投影与观察单槽 durable-first 替换 | registry.json 物理 IO、Discovery、Check Run 编排、UI、映射有效性裁决 | Project Scan Root CRUD、来源映射 CRUD、`checkoutObservations()`、`recordCheckoutObservation(_:)` | Persistence、Audit、Foundation | `PaguguTests/RegistryTests.swift`、`CheckRunTests.swift` |
+| Persistence | registry.json 与 audit-history.json 的唯一物理 IO、v1 持久记录、双 fsync 原子写、quarantine、Registry 外部修改检测 | 三类主张与审计记录的业务语义、Git/Discovery/Eligibility | Registry load/save/reset、Audit load/append | Foundation、Darwin | `PaguguTests/PersistenceTests.swift`、`RegistryTests.swift` |
+| Audit | 来源映射创建/删除的窄 append 语义入口；写失败 fail-open | 文件 IO、当前主张、恢复、执行许可 | `AuditEvidence.recordSourceMapping(...)` | Persistence、Foundation | `PaguguTests/RegistryTests.swift` |
 | Runs | 冻结完整 Scan Result scope，顺序 fetch、身份复核、逐项发布与汇总；run 瞬态 | Git/观察物理 IO、UI 投影、第二持久真相 | `CheckRunner.startCheck(scope:)` | Git、Eligibility、Registry | `PaguguTests/CheckRunTests.swift` |
-| AppModel | @MainActor composition root：启动/刷新与 Check Run 瞬态互斥，发布逐检出只读投影、目录逐态短语与五档静默排序 | 直接 Git/文件系统/持久 IO、Checkout Git State/更新资格/执行规则重建 | 既有 UI intents、`checkNow()` 与 `readModel` | Registry、Discovery、Git、Identity、Eligibility、Runs | `PaguguTests/AppModelTests.swift` |
+| AppModel | @MainActor composition root：启动/刷新与 Check Run 瞬态互斥，发布逐检出、映射、目录逐态短语与五档静默排序投影 | 直接 Git/文件系统/持久 IO、Checkout Git State/映射有效性/执行规则重建 | 启动/重扫、`checkNow()`、Project Scan Root CRUD、来源映射 CRUD、Registry reset | Registry、Discovery、Git、Identity、Eligibility、Runs | `PaguguTests/AppModelTests.swift` |
 | build_and_run.sh | kill、build、launch、进程验证 | 签名、公证、发布 | `run|--debug|--logs|--telemetry|--verify` | `xcodebuild`、macOS CLI | `--verify` |
 
 ## 产品不变量
@@ -68,10 +70,8 @@ Status: runnable discovery、全量手动 Check Run、逐检出观察、12 态�
 ## 明确未实现
 
 - `SKILL.md` frontmatter 的完整 Agent Skills 规范校验（name/description 字段违规标注）。
-- 更新与审计（#22–#26 后续票）。更新入口尚不存在；Check Run 只更新观察与只读投影。
+- Update Run 与 Check/Update Run 审计。更新入口尚不存在；Check Run 只更新观察与只读投影；当前审计集合只记录来源映射创建/删除。
 - Skill 详情「相关记录」「更新动作」两块（后续票）。
-- 来源映射维护与失效生命周期（#25 后续票）；当前无仓库可归行只呈现「来源不明」事实（内容完全一致的复制安装聚合为只读呈现组，ADR-0001 §4）。
-- 审计证据（Audit Evidence）持久集合。
 - Logo、签名、公证与发布。
 
 ## 验证

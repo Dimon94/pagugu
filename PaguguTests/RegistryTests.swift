@@ -127,6 +127,81 @@ final class RegistryTests: XCTestCase {
         XCTAssertEqual(roots.map(\.asFoundPath), [first.path, second.path])
     }
 
+    func testSourceMappingCreateDeletePersistsAndAuditsOnlyChanges() async throws {
+        let persistence = Persistence(directoryURL: dataDirectory)
+        let registry = AppRegistry(
+            persistence: persistence,
+            homeDirectory: homeDirectory,
+            personalRoots: [personalRoot.path]
+        )
+        _ = await registry.load()
+        let installationPath = "/installations/example"
+        let target = SourceMappingRecord(
+            skillSourceKey: "github.com/Owner/repo",
+            repositoryRelativePath: "skills/example"
+        )
+
+        let created = try await registry.createSourceMapping(
+            installationCanonicalPath: installationPath,
+            target: target
+        )
+        XCTAssertTrue(created)
+        let duplicate = try await registry.createSourceMapping(
+            installationCanonicalPath: installationPath,
+            target: target
+        )
+        XCTAssertFalse(duplicate)
+
+        let reloaded = AppRegistry(
+            persistence: Persistence(directoryURL: dataDirectory),
+            homeDirectory: homeDirectory,
+            personalRoots: [personalRoot.path]
+        )
+        _ = await reloaded.load()
+        let reloadedMappings = await reloaded.sourceMappings()
+        XCTAssertEqual(reloadedMappings[installationPath], target)
+
+        let deleted = try await reloaded.deleteSourceMapping(
+            installationCanonicalPath: installationPath
+        )
+        XCTAssertTrue(deleted)
+        let missing = try await reloaded.deleteSourceMapping(
+            installationCanonicalPath: installationPath
+        )
+        XCTAssertFalse(missing)
+
+        let audit = await Persistence(directoryURL: dataDirectory).loadAuditEvidence()
+        XCTAssertEqual(audit.records.map(\.outcome), [.created, .deleted])
+        XCTAssertEqual(audit.records.map(\.installationCanonicalPath), [installationPath, installationPath])
+    }
+
+    func testAuditWriteFailureDoesNotRollBackCreatedMapping() async throws {
+        let persistence = Persistence(directoryURL: dataDirectory)
+        let registry = AppRegistry(
+            persistence: persistence,
+            homeDirectory: homeDirectory,
+            personalRoots: [personalRoot.path]
+        )
+        _ = await registry.load()
+        try fileManager.createDirectory(
+            at: dataDirectory.appendingPathComponent("audit-history.json"),
+            withIntermediateDirectories: true
+        )
+        let target = SourceMappingRecord(
+            skillSourceKey: "github.com/Owner/repo",
+            repositoryRelativePath: "skills/example"
+        )
+
+        let created = try await registry.createSourceMapping(
+            installationCanonicalPath: "/installations/example",
+            target: target
+        )
+
+        XCTAssertTrue(created)
+        let mappings = await registry.sourceMappings()
+        XCTAssertEqual(mappings["/installations/example"], target)
+    }
+
     func testUnavailableRootIsRetainedAndAutomaticallyRevives() async throws {
         let root = try makeDirectory("movable")
         let registry = makeRegistry()

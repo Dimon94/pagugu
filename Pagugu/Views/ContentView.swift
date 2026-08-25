@@ -17,6 +17,7 @@ struct ContentView: View {
     @State private var selection: SkillDirectoryNode?
     @State private var showsProjectScanRoots = false
     @State private var showsProjectRootImporter = false
+    @State private var mappingRequest: MappingRequest?
 
     var body: some View {
         Group {
@@ -61,6 +62,13 @@ struct ContentView: View {
                 }
             )
         }
+        .sheet(item: $mappingRequest) { request in
+            SourceMappingSheet(
+                model: model,
+                installation: request.installation,
+                displayName: request.displayName
+            )
+        }
         .alert(
             "无法保存 App Registry",
             isPresented: Binding(
@@ -76,6 +84,17 @@ struct ContentView: View {
         } message: {
             Text(model.projectScanRootError?.reason ?? "Unknown")
         }
+        .alert(
+            "无法保存来源映射",
+            isPresented: Binding(
+                get: { model.sourceMappingError != nil },
+                set: { if !$0 { model.clearSourceMappingError() } }
+            )
+        ) {
+            Button("好") { model.clearSourceMappingError() }
+        } message: {
+            Text(model.sourceMappingError?.reason ?? "Unknown")
+        }
     }
 
     private var skillBrowser: some View {
@@ -84,6 +103,15 @@ struct ContentView: View {
                 readModel: model.readModel,
                 collapsedSources: model.collapsedSources,
                 onToggleSource: { model.toggleSourceCollapsed($0) },
+                mapSource: { installation, displayName in
+                    mappingRequest = MappingRequest(
+                        installation: installation,
+                        displayName: displayName
+                    )
+                },
+                deleteMapping: { path in
+                    _ = await model.deleteSourceMapping(installationCanonicalPath: path)
+                },
                 selection: $selection
             )
         } detail: {
@@ -141,8 +169,19 @@ struct ContentView: View {
                 SkillDetailPanel(
                     entry: entry,
                     checkouts: model.readModel.checkoutCards(for: entry.id.sourceKey),
-                    markdown: model.skillMarkdown(canonicalPath: entry.canonicalPath)
+                    markdown: model.skillMarkdown(canonicalPath: entry.canonicalPath),
+                    deleteMapping: { path in
+                        _ = await model.deleteSourceMapping(installationCanonicalPath: path)
+                    }
                 )
+            } else {
+                welcomePanel
+            }
+        case .invalidMapping(let path):
+            if let mapping = model.readModel.invalidMapping(for: path) {
+                InvalidSourceMappingPanel(mapping: mapping) {
+                    _ = await model.deleteSourceMapping(installationCanonicalPath: path)
+                }
             } else {
                 welcomePanel
             }
@@ -214,6 +253,13 @@ private struct CheckRunBanner: View {
         case nil: return .secondary
         }
     }
+}
+
+private struct MappingRequest: Identifiable {
+    var id: String { installation.canonicalPath }
+
+    let installation: SkillInstallation
+    let displayName: String
 }
 
 // MARK: - Project Scan Root 管理
@@ -343,6 +389,8 @@ private struct SkillDirectoryListView: View {
     let readModel: SkillReadModel
     let collapsedSources: Set<SkillSourceKey>
     let onToggleSource: (SkillSourceKey) -> Void
+    let mapSource: (SkillInstallation, String) -> Void
+    let deleteMapping: (String) async -> Void
     @Binding var selection: SkillDirectoryNode?
 
     var body: some View {
@@ -404,7 +452,15 @@ private struct SkillDirectoryListView: View {
             }
         case .unattributedInstallation(let id):
             if let item = readModel.unattributedItem(for: id) {
-                UnattributedInstallationRow(item: item)
+                UnattributedInstallationRow(
+                    item: item,
+                    mapSource: mapSource,
+                    deleteMapping: deleteMapping
+                )
+            }
+        case .invalidMapping(let path):
+            if let mapping = readModel.invalidMapping(for: path) {
+                InvalidSourceMappingRow(mapping: mapping, deleteMapping: deleteMapping)
             }
         }
     }
@@ -481,6 +537,9 @@ private struct SkillRow: View {
 
 private struct UnattributedInstallationRow: View {
     let item: UnattributedInstallationItem
+    let mapSource: (SkillInstallation, String) -> Void
+    let deleteMapping: (String) async -> Void
+    @State private var mappingPathToDelete: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -495,6 +554,25 @@ private struct UnattributedInstallationRow: View {
                     .foregroundStyle(.orange)
                 Spacer()
                 HostLogoSlots(hosts: item.hosts)
+                if item.installations.contains(where: {
+                    $0.projectionType == .copy || $0.sourceMapping != nil
+                }) {
+                    Menu("来源映射") {
+                        ForEach(item.installations, id: \.asFoundPath) { installation in
+                            if installation.projectionType == .copy && installation.sourceMapping == nil {
+                                Button("指定：\(installation.asFoundPath)") {
+                                    mapSource(installation, item.displayName)
+                                }
+                            } else if installation.sourceMapping != nil {
+                                Button("删除：\(installation.asFoundPath)", role: .destructive) {
+                                    mappingPathToDelete = installation.canonicalPath
+                                }
+                            }
+                        }
+                    }
+                    .menuStyle(.borderlessButton)
+                    .accessibilityLabel("管理 \(item.displayName) 的来源映射")
+                }
             }
             // 消歧 caption：聚合组显示安装位置数，单例显示路径（同名不同内容按此区分）
             Text(item.installations.count > 1
@@ -506,6 +584,49 @@ private struct UnattributedInstallationRow: View {
                 .truncationMode(.middle)
         }
         .padding(.vertical, 2)
+        .alert(
+            "确认删除来源映射？",
+            isPresented: Binding(
+                get: { mappingPathToDelete != nil },
+                set: { if !$0 { mappingPathToDelete = nil } }
+            )
+        ) {
+            Button("取消", role: .cancel) { mappingPathToDelete = nil }
+            Button("删除映射", role: .destructive) {
+                guard let path = mappingPathToDelete else { return }
+                mappingPathToDelete = nil
+                Task { await deleteMapping(path) }
+            }
+        } message: {
+            Text("只删除映射记录。不会修改 Skill Installation、Skill Source 或 Git 工作树。")
+        }
+    }
+}
+
+private struct InvalidSourceMappingRow: View {
+    let mapping: SourceMappingProjection
+    let deleteMapping: (String) async -> Void
+    @State private var showsDeleteConfirmation = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label("来源映射失效", systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(mapping.installationCanonicalPath)
+                .font(.caption2.monospaced())
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Button("删除映射", role: .destructive) { showsDeleteConfirmation = true }
+                .font(.caption)
+        }
+        .alert("确认删除来源映射？", isPresented: $showsDeleteConfirmation) {
+            Button("取消", role: .cancel) {}
+            Button("删除映射", role: .destructive) {
+                Task { await deleteMapping(mapping.installationCanonicalPath) }
+            }
+        } message: {
+            Text("只删除映射记录。不会修改 Skill Installation、Skill Source 或 Git 工作树。")
+        }
     }
 }
 
@@ -592,6 +713,7 @@ private struct SkillDetailPanel: View {
     let entry: SkillDirectoryEntry
     let checkouts: [CheckoutCardReadModel]
     let markdown: String?
+    let deleteMapping: (String) async -> Void
 
     var body: some View {
         ScrollView {
@@ -608,7 +730,10 @@ private struct SkillDetailPanel: View {
 
                 Divider()
 
-                InstallationsBlock(installations: entry.installations)
+                InstallationsBlock(
+                    installations: entry.installations,
+                    deleteMapping: deleteMapping
+                )
 
                 Divider()
 
@@ -826,6 +951,8 @@ private struct UnattributedInstallationPanel: View {
 
 private struct InstallationsBlock: View {
     let installations: [SkillInstallation]
+    var deleteMapping: ((String) async -> Void)? = nil
+    @State private var mappingPathToDelete: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -850,17 +977,54 @@ private struct InstallationsBlock: View {
                     }
                     HStack(spacing: 6) {
                         HostLogoSlots(hosts: installation.hosts)
-                        Text(installation.projectionType.displayName + attributionNote(for: installation.projectionType))
+                        Text(installation.projectionType.displayName + attributionNote(for: installation))
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    if let mapping = installation.sourceMapping {
+                        switch mapping.validity {
+                        case .invalid(let reason):
+                            Text("映射失效：\(reason.message)")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        case .unverified:
+                            Text("扫描不完整，暂不重验证该映射。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        case .valid:
+                            EmptyView()
+                        }
+                    }
+                    if installation.isManuallyMapped, deleteMapping != nil {
+                        Button("删除来源映射", role: .destructive) {
+                            mappingPathToDelete = installation.canonicalPath
+                        }
+                        .font(.caption)
+                    }
                 }
             }
         }
+        .alert(
+            "确认删除来源映射？",
+            isPresented: Binding(
+                get: { mappingPathToDelete != nil },
+                set: { if !$0 { mappingPathToDelete = nil } }
+            )
+        ) {
+            Button("取消", role: .cancel) { mappingPathToDelete = nil }
+            Button("删除映射", role: .destructive) {
+                guard let path = mappingPathToDelete, let deleteMapping else { return }
+                mappingPathToDelete = nil
+                Task { await deleteMapping(path) }
+            }
+        } message: {
+            Text("只删除映射记录。该复制投影会回到来源不明；不会修改磁盘内容。")
+        }
     }
 
-    private func attributionNote(for type: ProjectionType) -> String {
-        switch type {
+    private func attributionNote(for installation: SkillInstallation) -> String {
+        if installation.isManuallyMapped { return " · 人工映射" }
+        switch installation.projectionType {
         case .symlink: return " · 已归因到本来源"
         case .repositorySelf: return " · 安装路径即来源工作树"
         case .copy: return " · 来源不明"
@@ -915,6 +1079,137 @@ private struct MarkdownSourceBlock: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+}
+
+// MARK: - 来源映射
+
+private struct MappingTargetGroup: Identifiable {
+    var id: SkillSourceKey { sourceKey }
+
+    let sourceKey: SkillSourceKey
+    let entries: [SkillDirectoryEntry]
+}
+
+private struct SourceMappingSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var model: AppModel
+    let installation: SkillInstallation
+    let displayName: String
+    @State private var query = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("指定来源")
+                        .font(.title2.bold())
+                    Text(installation.asFoundPath)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("关闭") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+            }
+
+            if model.readModel.mappingTargets.isEmpty {
+                ContentUnavailableView(
+                    "没有可指定的 Skill",
+                    systemImage: "folder.badge.plus",
+                    description: Text("请先添加包含 Skill Source 的 Project Scan Root。")
+                )
+            } else {
+                List {
+                    ForEach(filteredGroups) { group in
+                        Section(group.sourceKey.registryValue) {
+                            ForEach(group.entries) { target in
+                                Button {
+                                    Task {
+                                        let created = await model.createSourceMapping(
+                                            installationCanonicalPath: installation.canonicalPath,
+                                            targetIdentity: target.id
+                                        )
+                                        if created { dismiss() }
+                                    }
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(target.displayName)
+                                        Text(target.id.repositoryRelativePath.isEmpty
+                                             ? "（仓库根目录）"
+                                             : target.id.repositoryRelativePath)
+                                            .font(.caption.monospaced())
+                                            .foregroundStyle(.secondary)
+                                        if target.displayName != displayName {
+                                            Label(
+                                                "frontmatter name 不同；名称不参与身份，不阻断指定。",
+                                                systemImage: "exclamationmark.triangle"
+                                            )
+                                            .font(.caption)
+                                            .foregroundStyle(.orange)
+                                        }
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("指定来源为 \(target.displayName)")
+                            }
+                        }
+                    }
+                }
+                .searchable(text: $query, prompt: "筛选 Skill 或来源")
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 680, minHeight: 480)
+    }
+
+    private var filteredGroups: [MappingTargetGroup] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let targets = model.readModel.mappingTargets.filter { target in
+            needle.isEmpty || target.displayName.lowercased().contains(needle) ||
+                target.id.sourceKey.registryValue.lowercased().contains(needle) ||
+                target.id.repositoryRelativePath.lowercased().contains(needle)
+        }
+        return Dictionary(grouping: targets, by: { $0.id.sourceKey })
+            .map { sourceKey, entries in
+                MappingTargetGroup(
+                    sourceKey: sourceKey,
+                    entries: entries.sorted { $0.displayName < $1.displayName }
+                )
+            }
+            .sorted { $0.sourceKey.registryValue < $1.sourceKey.registryValue }
+    }
+}
+
+private struct InvalidSourceMappingPanel: View {
+    let mapping: SourceMappingProjection
+    let deleteMapping: () async -> Void
+    @State private var showsDeleteConfirmation = false
+
+    var body: some View {
+        ContentUnavailableView {
+            Label("来源映射失效", systemImage: "exclamationmark.triangle")
+        } description: {
+            VStack(spacing: 8) {
+                Text(mapping.installationCanonicalPath)
+                    .font(.body.monospaced())
+                    .textSelection(.enabled)
+                if case .invalid(let reason) = mapping.validity {
+                    Text(reason.message)
+                }
+            }
+        } actions: {
+            Button("删除映射", role: .destructive) { showsDeleteConfirmation = true }
+        }
+        .alert("确认删除来源映射？", isPresented: $showsDeleteConfirmation) {
+            Button("取消", role: .cancel) {}
+            Button("删除映射", role: .destructive) {
+                Task { await deleteMapping() }
+            }
+        } message: {
+            Text("只删除映射记录。不会修改 Skill Installation、Skill Source 或 Git 工作树。")
         }
     }
 }

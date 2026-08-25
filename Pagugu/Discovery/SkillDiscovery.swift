@@ -65,6 +65,20 @@ struct ScanResult: Sendable {
     let outcome: ScanOutcome
     let skills: [DiscoveredSkill]
     let issues: [ScanIssue]
+    /// Discovery 只证明 `.git` 存在；remote 身份归后续 Git Fact seam。
+    let candidateSourceRoots: Set<String>
+
+    init(
+        outcome: ScanOutcome,
+        skills: [DiscoveredSkill],
+        issues: [ScanIssue],
+        candidateSourceRoots: Set<String> = []
+    ) {
+        self.outcome = outcome
+        self.skills = skills
+        self.issues = issues
+        self.candidateSourceRoots = candidateSourceRoots
+    }
 }
 
 // MARK: - Discovery 扫描入口
@@ -82,6 +96,7 @@ enum Discovery {
     static func scanPersonalRoots(_ roots: [String]) -> ScanResult {
         var skills: [DiscoveredSkill] = []
         var issues: [ScanIssue] = []
+        var candidateSourceRoots = Set<String>()
         var hasPartial = false
 
         for root in roots {
@@ -99,12 +114,18 @@ enum Discovery {
                 canonicals: &canonicals,
                 skills: &skills,
                 issues: &issues,
+                candidateSourceRoots: &candidateSourceRoots,
                 partial: &hasPartial
             )
         }
 
         let outcome: ScanOutcome = hasPartial ? .partial : .complete
-        return ScanResult(outcome: outcome, skills: skills, issues: issues)
+        return ScanResult(
+            outcome: outcome,
+            skills: skills,
+            issues: issues,
+            candidateSourceRoots: candidateSourceRoots.union(skills.compactMap(\.repositoryRootPath))
+        )
     }
 
     /// 扫描单个 Project Scan Root。
@@ -121,6 +142,7 @@ enum Discovery {
         var skills: [DiscoveredSkill] = []
         var issues: [ScanIssue] = []
         var canonicals = Set<String>()
+        var candidateSourceRoots = Set<String>()
         var hasPartial = false
 
         scanDirectory(
@@ -130,11 +152,17 @@ enum Discovery {
             canonicals: &canonicals,
             skills: &skills,
             issues: &issues,
+            candidateSourceRoots: &candidateSourceRoots,
             partial: &hasPartial
         )
 
         let outcome: ScanOutcome = hasPartial ? .partial : .complete
-        return ScanResult(outcome: outcome, skills: skills, issues: issues)
+        return ScanResult(
+            outcome: outcome,
+            skills: skills,
+            issues: issues,
+            candidateSourceRoots: candidateSourceRoots.union(skills.compactMap(\.repositoryRootPath))
+        )
     }
 
     /// 一次完整 Discovery Scan：Personal Skill Root 与全部持久 Project Scan Root 共用同一产物。
@@ -158,7 +186,8 @@ enum Discovery {
         return ScanResult(
             outcome: outcome,
             skills: results.flatMap(\.skills),
-            issues: results.flatMap(\.issues)
+            issues: results.flatMap(\.issues),
+            candidateSourceRoots: Set(results.flatMap(\.candidateSourceRoots))
         )
     }
 
@@ -171,12 +200,16 @@ enum Discovery {
         canonicals: inout Set<String>,
         skills: inout [DiscoveredSkill],
         issues: inout [ScanIssue],
+        candidateSourceRoots: inout Set<String>,
         partial: inout Bool
     ) {
         let fm = FileManager.default
         let canonical = resolveCanonical(path)
         guard canonicals.insert(canonical).inserted else {
             return
+        }
+        if fm.fileExists(atPath: (path as NSString).appendingPathComponent(".git")) {
+            candidateSourceRoots.insert(canonical)
         }
         let skillMD = (path as NSString).appendingPathComponent("SKILL.md")
 
@@ -250,6 +283,7 @@ enum Discovery {
                 canonicals: &canonicals,
                 skills: &skills,
                 issues: &issues,
+                candidateSourceRoots: &candidateSourceRoots,
                 partial: &partial
             )
         }

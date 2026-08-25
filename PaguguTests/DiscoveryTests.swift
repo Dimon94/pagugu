@@ -52,6 +52,25 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertEqual(result.skills.first?.name, "my-skill", "frontmatter name 即展示名")
     }
 
+    func testDiscoveredSkillCarriesNearestRepositoryLocation() throws {
+        let repository = tmp.appendingPathComponent("repository")
+        try fm.createDirectory(at: repository, withIntermediateDirectories: true)
+        try "gitdir: /tmp/worktree-git\n".write(
+            to: repository.appendingPathComponent(".git"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let skill = repository.appendingPathComponent("skills/example")
+        try writeSkill(at: skill)
+
+        let result = Discovery.scanProjectRoot(repository.appendingPathComponent("skills").path)
+
+        XCTAssertEqual(result.skills.first?.repositoryRootPath, repository.path)
+        XCTAssertEqual(result.skills.first?.canonicalPath, skill.path)
+        XCTAssertEqual(result.skills.first?.name, "test-skill")
+        XCTAssertEqual(result.candidateSourceRoots, [repository.path])
+    }
+
     // MARK: - 软链接解析 + 单 root 内 Canonical Path 防环
 
     func testSymlinkWithinSameRootDeduplicates() throws {

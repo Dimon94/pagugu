@@ -2,12 +2,13 @@ import Darwin
 import Foundation
 
 // L3 COORD: Pagugu/Persistence/Persistence.swift
-// INPUT: Application Support 目录或测试注入目录中的 registry.json。
-// OUTPUT: RegistryDocument 当前主张，或阻断式 RegistryRecovery。
+// INPUT: Application Support 目录或测试注入目录中的 registry.json 与 audit-history.json。
+// OUTPUT: RegistryDocument 当前主张、阻断式 RegistryRecovery，或 fail-open AuditDocument。
 // POS: Persistence 物理 owner。只依赖 Foundation，不拥有主张语义。
 // TEST: repo://PaguguTests/PersistenceTests.swift。
 
-// L5 PARAM: schemaVersion 当前只接受 1。顶层恰好编码三类集合；未知字段可忽略且重写不保留。
+// L5 PARAM: Registry/Audit schemaVersion 当前只接受 1；Audit FIFO 上限 200。
+// Registry 顶层恰好编码三类集合；未知字段可忽略且重写不保留。
 // PAIR: CheckoutObservation success 必须有 remoteTipSHA；failure 必须没有。
 // FAIL: 缺字段、类型不符、路径/身份配对无效均走损坏 quarantine。
 struct RegistryDocument: Codable, Equatable, Sendable {
@@ -38,7 +39,7 @@ struct RegistryDocument: Codable, Equatable, Sendable {
         }
 
         guard sourceMappings.allSatisfy({ key, value in
-            isNormalizedAbsolutePath(key) && !value.skillSourceKey.isEmpty &&
+            isNormalizedAbsolutePath(key) && isNormalizedSkillSourceKey(value.skillSourceKey) &&
                 isNormalizedRelativePath(value.repositoryRelativePath)
         }) else {
             throw RegistryValidationError.invalidSourceMapping
@@ -96,6 +97,41 @@ struct CheckoutIdentityDigest: Codable, Equatable, Sendable {
     let upstreamRefName: String
 }
 
+struct AuditDocument: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = 1
+    static let empty = AuditDocument(schemaVersion: currentSchemaVersion, records: [])
+
+    let schemaVersion: Int
+    let records: [AuditRecord]
+
+    fileprivate func validate() throws {
+        guard schemaVersion == Self.currentSchemaVersion,
+              Set(records.map(\.id)).count == records.count,
+              records.allSatisfy(\.isValid) else {
+            throw AuditValidationError.invalidDocument
+        }
+    }
+}
+
+struct AuditRecord: Codable, Equatable, Sendable {
+    enum Outcome: String, Codable, Equatable, Sendable {
+        case created
+        case deleted
+    }
+
+    let id: String
+    let recordedAt: Date
+    let outcome: Outcome
+    let installationCanonicalPath: String
+    let target: SourceMappingRecord
+
+    fileprivate var isValid: Bool {
+        !id.isEmpty && isNormalizedAbsolutePath(installationCanonicalPath) &&
+            isNormalizedSkillSourceKey(target.skillSourceKey) &&
+            isNormalizedRelativePath(target.repositoryRelativePath)
+    }
+}
+
 struct RegistryRecovery: Equatable, Sendable {
     enum Kind: Equatable, Sendable {
         case corrupt
@@ -129,14 +165,32 @@ private enum RegistryValidationError: Error {
     case invalidCheckoutObservation
 }
 
+private enum AuditValidationError: Error {
+    case invalidDocument
+}
+
 private func isNormalizedAbsolutePath(_ path: String) -> Bool {
     path.hasPrefix("/") && (path as NSString).standardizingPath == path
 }
 
 private func isNormalizedRelativePath(_ path: String) -> Bool {
-    !path.isEmpty && !path.hasPrefix("/") && path != "." &&
+    path.isEmpty || (!path.hasPrefix("/") && path != "." &&
         !(path as NSString).pathComponents.contains("..") &&
-        (path as NSString).standardizingPath == path
+        (path as NSString).standardizingPath == path)
+}
+
+private func isNormalizedSkillSourceKey(_ value: String) -> Bool {
+    if value.hasPrefix("/") { return isNormalizedAbsolutePath(value) }
+    guard value == value.trimmingCharacters(in: .whitespacesAndNewlines),
+          !value.contains(where: \.isWhitespace),
+          !value.contains("://"), !value.contains("@"), !value.contains(":"),
+          !value.hasPrefix("/"), !value.hasSuffix("/"),
+          !value.lowercased().hasSuffix(".git") else {
+        return false
+    }
+    let parts = value.split(separator: "/", omittingEmptySubsequences: false)
+    return parts.count >= 2 && parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) &&
+        parts[0] == parts[0].lowercased()
 }
 
 actor Persistence {
@@ -157,6 +211,7 @@ actor Persistence {
 
     private let directoryURL: URL
     private let registryURL: URL
+    private let auditURL: URL
     private let beforeAtomicReplace: AtomicWriteHook
     private var loadResult: RegistryLoadResult?
     private var knownRegistryBytes: Data?
@@ -167,6 +222,7 @@ actor Persistence {
     ) {
         self.directoryURL = directoryURL
         self.registryURL = directoryURL.appendingPathComponent("registry.json")
+        self.auditURL = directoryURL.appendingPathComponent("audit-history.json")
         self.beforeAtomicReplace = beforeAtomicReplace
     }
 
@@ -320,6 +376,42 @@ actor Persistence {
         return evidenceURL
     }
 
+    /// 审计损坏时 fail-open：保留损坏文件并返回空历史，不阻断 Registry 动作。
+    func loadAuditEvidence() -> AuditDocument {
+        guard FileManager.default.fileExists(atPath: auditURL.path),
+              let bytes = try? Data(contentsOf: auditURL) else {
+            return .empty
+        }
+
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let document = try decoder.decode(AuditDocument.self, from: bytes)
+            try document.validate()
+            return document
+        } catch {
+            _ = try? quarantineAudit()
+            return .empty
+        }
+    }
+
+    /// L4 OUT: append-only，超过 200 条时淘汰最旧记录；复用 Registry 的 durable write。
+    func appendAuditEvidence(_ record: AuditRecord) throws {
+        guard record.isValid else { throw AuditValidationError.invalidDocument }
+        let current = loadAuditEvidence()
+        let records = Array((current.records + [record]).suffix(200))
+        let document = AuditDocument(schemaVersion: AuditDocument.currentSchemaVersion, records: records)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        do {
+            try ensureDirectory()
+            try writeDurably(encoder.encode(document), to: auditURL)
+        } catch {
+            throw AuditValidationError.invalidDocument
+        }
+    }
+
     private func remember(_ result: RegistryLoadResult, bytes: Data?) -> RegistryLoadResult {
         loadResult = result
         knownRegistryBytes = bytes
@@ -350,6 +442,15 @@ actor Persistence {
         return quarantineURL
     }
 
+    private func quarantineAudit() throws -> URL {
+        let suffix = "\(Int(Date().timeIntervalSince1970 * 1_000))-\(UUID().uuidString)"
+        let quarantineURL = directoryURL.appendingPathComponent("audit-history.corrupt-\(suffix).json")
+        guard rename(auditURL.path, quarantineURL.path) == 0 else {
+            throw POSIXFailure(code: errno)
+        }
+        return quarantineURL
+    }
+
     private func ensureDirectory() throws {
         try FileManager.default.createDirectory(
             at: directoryURL,
@@ -362,7 +463,7 @@ actor Persistence {
     }
 
     /// L6 CHAIN: 同目录临时文件 → 完整写入 → fsync 文件 → rename → fsync 目录。
-    /// 审计文件接通时必须复用本函数，不得另建写路径。
+    /// Registry 与 Audit 必须复用本函数，不得另建写路径。
     private func writeDurably(_ data: Data, to destinationURL: URL) throws {
         let temporaryURL = directoryURL.appendingPathComponent(
             ".\(destinationURL.lastPathComponent).\(UUID().uuidString).tmp"

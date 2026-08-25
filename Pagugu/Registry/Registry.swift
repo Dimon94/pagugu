@@ -2,8 +2,10 @@ import Foundation
 
 // L3 COORD: Pagugu/Registry/Registry.swift
 // INPUT: 用户选择的目录 URL、Personal Skill Root 与 Persistence 的 RegistryDocument。
-// OUTPUT: 按序、无丢失持久化的 Project Scan Root 主张、Checkout Observation 与实时投影。
-// POS: Registry 语义 owner。拥有串行 mutation、护栏、主张与观察单槽；不拥有物理 IO、Discovery 与 UI。
+// OUTPUT: 按序、无丢失持久化的 Project Scan Root、来源映射、Checkout Observation 与实时投影；
+//         来源映射写成功后 best-effort 记录审计。
+// POS: Registry 语义 owner。拥有串行 mutation、护栏、主张生命周期与观察单槽；
+//      不拥有物理 IO、Discovery、映射有效性裁决与 UI。
 // TEST: repo://PaguguTests/RegistryTests.swift。
 
 struct ProjectScanRoot: Identifiable, Equatable, Sendable {
@@ -56,8 +58,40 @@ enum ProjectScanRootError: Error, Equatable, Sendable {
     }
 }
 
+enum SourceMappingError: Error, Equatable, Sendable {
+    case notLoaded
+    case alreadyMapped
+    case installationUnavailable
+    case targetUnavailable
+    case persistence(PersistenceError)
+
+    var reason: String {
+        switch self {
+        case .notLoaded:
+            return "App Registry 尚未载入。请稍后重试。"
+        case .alreadyMapped:
+            return "该 Skill Installation 已有来源映射。请先显式删除原映射。"
+        case .installationUnavailable:
+            return "该来源不明 Installation 已不在当前扫描结果中。请重新扫描后再试。"
+        case .targetUnavailable:
+            return "所选 Skill 已不在当前扫描结果中。请重新选择来源。"
+        case .persistence(.writeFailed):
+            return "Registry 写入失败。请检查磁盘空间与目录权限后重试。"
+        case .persistence(.externallyModified):
+            return "Registry 已被外部修改。请退出并重新打开 Pagugu 后重试。"
+        case .persistence(.recoveryRequired):
+            return "App Registry 需要恢复。请先按页面指引恢复。"
+        case .persistence(.notLoaded), .persistence(.invalidDocument):
+            return "Registry 无法保存该来源映射。请退出并重新打开 Pagugu 后重试。"
+        case .persistence(.resetConfirmationRequired):
+            return "该动作不应触发 Registry 重置。"
+        }
+    }
+}
+
 actor AppRegistry {
     private let persistence: Persistence
+    private let audit: AuditEvidence
     private let homeCanonicalPath: String
     private let personalRootAsFoundPaths: [String]
     private let personalRootCanonicalPaths: [String]
@@ -71,6 +105,7 @@ actor AppRegistry {
         personalRoots: [String] = Discovery.personalSkillRoots
     ) {
         self.persistence = persistence
+        self.audit = AuditEvidence(persistence: persistence)
         self.homeCanonicalPath = Self.canonicalPath(homeDirectory.path)
         self.personalRootAsFoundPaths = personalRoots.map(Self.standardizedPath)
         self.personalRootCanonicalPaths = personalRoots.map(Self.canonicalPath)
@@ -162,6 +197,65 @@ actor AppRegistry {
         self.document = updated
     }
 
+    func sourceMappings() -> [String: SourceMappingRecord] {
+        document?.sourceMappings ?? [:]
+    }
+
+    /// L4 IN: AppModel 已确认 Installation 当前为来源不明复制投影，目标身份当前存在。
+    /// OUT: durable write 成功后提交主张，再 best-effort 写 created 审计；相同记录为 no-op。
+    func createSourceMapping(
+        installationCanonicalPath: String,
+        target: SourceMappingRecord
+    ) async throws -> Bool {
+        await beginMutation()
+        defer { endMutation() }
+        guard let document else { throw SourceMappingError.notLoaded }
+        if let existing = document.sourceMappings[installationCanonicalPath] {
+            guard existing != target else { return false }
+            throw SourceMappingError.alreadyMapped
+        }
+
+        var mappings = document.sourceMappings
+        mappings[installationCanonicalPath] = target
+        let updated = RegistryDocument(
+            schemaVersion: document.schemaVersion,
+            projectScanRoots: document.projectScanRoots,
+            sourceMappings: mappings,
+            checkoutObservations: document.checkoutObservations
+        )
+        try await save(updated, as: SourceMappingError.self)
+        await audit.recordSourceMapping(
+            outcome: .created,
+            installationCanonicalPath: installationCanonicalPath,
+            target: target
+        )
+        return true
+    }
+
+    /// 只删除映射主张。Installation、Skill Source 与 Git 工作树保持不动。
+    func deleteSourceMapping(installationCanonicalPath: String) async throws -> Bool {
+        await beginMutation()
+        defer { endMutation() }
+        guard let document else { throw SourceMappingError.notLoaded }
+        guard let removed = document.sourceMappings[installationCanonicalPath] else { return false }
+
+        var mappings = document.sourceMappings
+        mappings.removeValue(forKey: installationCanonicalPath)
+        let updated = RegistryDocument(
+            schemaVersion: document.schemaVersion,
+            projectScanRoots: document.projectScanRoots,
+            sourceMappings: mappings,
+            checkoutObservations: document.checkoutObservations
+        )
+        try await save(updated, as: SourceMappingError.self)
+        await audit.recordSourceMapping(
+            outcome: .deleted,
+            installationCanonicalPath: installationCanonicalPath,
+            target: removed
+        )
+        return true
+    }
+
     func reset(confirmed: Bool) async throws -> URL? {
         await beginMutation()
         defer { endMutation() }
@@ -230,11 +324,24 @@ actor AppRegistry {
             sourceMappings: document.sourceMappings,
             checkoutObservations: document.checkoutObservations
         )
+        try await save(updated, as: ProjectScanRootError.self)
+    }
+
+    private func save(_ updated: RegistryDocument, as _: ProjectScanRootError.Type) async throws {
         do {
             try await persistence.saveRegistry(updated)
-            self.document = updated
+            document = updated
         } catch let error as PersistenceError {
             throw ProjectScanRootError.persistence(error)
+        }
+    }
+
+    private func save(_ updated: RegistryDocument, as _: SourceMappingError.Type) async throws {
+        do {
+            try await persistence.saveRegistry(updated)
+            document = updated
+        } catch let error as PersistenceError {
+            throw SourceMappingError.persistence(error)
         }
     }
 

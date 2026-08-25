@@ -2,7 +2,7 @@ import Foundation
 
 // L3 COORD: Pagugu/AppModel/AppModel.swift
 // POS: AppModel 模块（ADR-0009 §7）。@MainActor composition root：
-//      owns Skill Read Model、受限恢复模式投影、目录收起与 Check Run 瞬态、全部 UI intent
+//      owns Skill Read Model、受限恢复与来源映射错误投影、目录收起与 Check Run 瞬态、全部 UI intent
 //      与启动/刷新编排。does not own 直接 Git/文件系统/持久 IO（经 Git/Discovery/Registry/Runs seam）、
 //      业务规则重建。
 // TEST: repo://PaguguTests/AppModelTests.swift（Registry gate、Project Scan Root intent、
@@ -19,6 +19,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var projectScanRootError: ProjectScanRootError?
     @Published private(set) var checkRunProgress: CheckRunProgress?
     @Published private(set) var checkRunSummary: CheckRunSummary?
+    @Published private(set) var sourceMappingError: SourceMappingError?
 
     /// 收起的来源仓库行集合（默认全部展开）。瞬态 UI 状态，不持久化。
     @Published private(set) var collapsedSources: Set<SkillSourceKey> = []
@@ -68,15 +69,19 @@ final class AppModel: ObservableObject {
             personalRoots: personalRoots,
             projectRoots: projectScanRoots.filter(\.passesGuardrails).map(\.canonicalPath)
         )
-        let checkoutPaths = Set(scanResult.skills.compactMap(\.repositoryRootPath)).sorted()
+        let checkoutPaths = scanResult.candidateSourceRoots
+            .union(scanResult.skills.compactMap(\.repositoryRootPath))
+            .sorted()
         var factsByCheckoutPath: [String: CheckoutGitFacts] = [:]
         for path in checkoutPaths {
             // local-only 先读实时身份与 remote-tracking SHA；新鲜成功观察才解锁相对位置。
             factsByCheckoutPath[path] = await gitInspector.inspectCheckout(at: path, scope: .localOnly)
         }
+        let mappings = await registry.sourceMappings()
         let contents = SkillDirectory.contents(
             from: scanResult,
-            gitFactsByCheckoutPath: factsByCheckoutPath
+            gitFactsByCheckoutPath: factsByCheckoutPath,
+            mappings: mappings
         )
         let observations = await registry.checkoutObservations()
         for source in contents.sources {
@@ -125,6 +130,8 @@ final class AppModel: ObservableObject {
         readModel = SkillReadModel(
             sources: contents.sources,
             unattributedInstallations: contents.unattributedInstallations,
+            mappingTargets: contents.mappingTargets,
+            invalidMappings: contents.invalidMappings,
             issues: scanResult.issues,
             scanOutcome: scanResult.outcome,
             projectScanRoots: projectScanRoots,
@@ -225,6 +232,66 @@ final class AppModel: ObservableObject {
         projectScanRootError = nil
     }
 
+    /// 写前按当前 Installation 事实与目标 Skill 重查；呈现组和内容指纹都不能成为映射键。
+    func createSourceMapping(
+        installationCanonicalPath: String,
+        targetIdentity: SkillIdentity
+    ) async -> Bool {
+        let installation = readModel.unattributedInstallations
+            .flatMap(\.installations)
+            .first {
+                $0.canonicalPath == installationCanonicalPath && $0.projectionType == .copy
+            }
+        guard let installation, installation.sourceMapping == nil else {
+            sourceMappingError = .installationUnavailable
+            return false
+        }
+        guard readModel.mappingTargets.contains(where: { $0.id == targetIdentity }) else {
+            sourceMappingError = .targetUnavailable
+            return false
+        }
+
+        do {
+            let changed = try await registry.createSourceMapping(
+                installationCanonicalPath: installationCanonicalPath,
+                target: SourceMappingRecord(
+                    skillSourceKey: targetIdentity.sourceKey.registryValue,
+                    repositoryRelativePath: targetIdentity.repositoryRelativePath
+                )
+            )
+            sourceMappingError = nil
+            if changed { await publishDiscovery() }
+            return changed
+        } catch let error as SourceMappingError {
+            handleSourceMappingError(error)
+            return false
+        } catch {
+            sourceMappingError = .notLoaded
+            return false
+        }
+    }
+
+    func deleteSourceMapping(installationCanonicalPath: String) async -> Bool {
+        do {
+            let changed = try await registry.deleteSourceMapping(
+                installationCanonicalPath: installationCanonicalPath
+            )
+            sourceMappingError = nil
+            if changed { await publishDiscovery() }
+            return changed
+        } catch let error as SourceMappingError {
+            handleSourceMappingError(error)
+            return false
+        } catch {
+            sourceMappingError = .notLoaded
+            return false
+        }
+    }
+
+    func clearSourceMappingError() {
+        sourceMappingError = nil
+    }
+
     /// 显式确认后清空三类 Registry 主张；成功后恢复完整扫描。
     func resetRegistry(confirmed: Bool) async {
         do {
@@ -232,6 +299,7 @@ final class AppModel: ObservableObject {
             registryRecovery = nil
             registryReady = true
             projectScanRootError = nil
+            sourceMappingError = nil
             await publishDiscovery()
         } catch let error as ProjectScanRootError {
             if case .persistence(.writeFailed(let recovery)) = error {
@@ -271,6 +339,21 @@ final class AppModel: ObservableObject {
             readModel = .empty()
         case .fileSystemRoot, .homeDirectory, .personalSkillRoot,
              .personalSkillRootAncestor, .unavailable, .duplicate, .notLoaded,
+             .persistence(.writeFailed), .persistence(.invalidDocument),
+             .persistence(.notLoaded), .persistence(.resetConfirmationRequired):
+            break
+        }
+    }
+
+    private func handleSourceMappingError(_ error: SourceMappingError) {
+        sourceMappingError = error
+        switch error {
+        case .persistence(.externallyModified(let recovery)),
+             .persistence(.recoveryRequired(let recovery)):
+            registryRecovery = recovery
+            registryReady = false
+            readModel = .empty()
+        case .notLoaded, .alreadyMapped, .installationUnavailable, .targetUnavailable,
              .persistence(.writeFailed), .persistence(.invalidDocument),
              .persistence(.notLoaded), .persistence(.resetConfirmationRequired):
             break

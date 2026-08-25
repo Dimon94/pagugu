@@ -3,6 +3,76 @@ import XCTest
 
 // Skill Source Key 规范化表测试（ADR-0001 §1：忽略协议与认证、去 .git、host 小写、路径大小写不归一；fork 是不同来源）。
 final class IdentityTests: XCTestCase {
+    func testSourceMappingValidityTableAndAutomaticRevival() {
+        let identity = SkillIdentity(
+            sourceKey: .localPath("/projects/repo"),
+            repositoryRelativePath: "skills/example"
+        )
+        let installationPath = "/installations/example"
+        let validFacts = (
+            copies: Set([installationPath]),
+            sources: Set([identity.sourceKey]),
+            skills: Set([identity])
+        )
+
+        XCTAssertEqual(
+            SourceMappingEvaluator.evaluate(
+                installationCanonicalPath: installationPath,
+                targetIdentity: identity,
+                scanOutcome: .complete,
+                copyInstallationPaths: validFacts.copies,
+                discoveredSourceKeys: validFacts.sources,
+                discoveredSkillIdentities: validFacts.skills
+            ),
+            .valid
+        )
+        XCTAssertEqual(
+            SourceMappingEvaluator.evaluate(
+                installationCanonicalPath: installationPath,
+                targetIdentity: identity,
+                scanOutcome: .complete,
+                copyInstallationPaths: [],
+                discoveredSourceKeys: validFacts.sources,
+                discoveredSkillIdentities: validFacts.skills
+            ),
+            .invalid(.installationNotCopy)
+        )
+        XCTAssertEqual(
+            SourceMappingEvaluator.evaluate(
+                installationCanonicalPath: installationPath,
+                targetIdentity: identity,
+                scanOutcome: .complete,
+                copyInstallationPaths: validFacts.copies,
+                discoveredSourceKeys: [],
+                discoveredSkillIdentities: []
+            ),
+            .invalid(.sourceNotFound)
+        )
+        XCTAssertEqual(
+            SourceMappingEvaluator.evaluate(
+                installationCanonicalPath: installationPath,
+                targetIdentity: identity,
+                scanOutcome: .complete,
+                copyInstallationPaths: validFacts.copies,
+                discoveredSourceKeys: validFacts.sources,
+                discoveredSkillIdentities: []
+            ),
+            .invalid(.skillNotFound)
+        )
+        for outcome in [ScanOutcome.partial, .failed] {
+            XCTAssertEqual(
+                SourceMappingEvaluator.evaluate(
+                    installationCanonicalPath: installationPath,
+                    targetIdentity: identity,
+                    scanOutcome: outcome,
+                    copyInstallationPaths: [],
+                    discoveredSourceKeys: [],
+                    discoveredSkillIdentities: []
+                ),
+                .unverified
+            )
+        }
+    }
     func testSourceKeyNormalizationUnifiesProtocolAndAuthForms() {
         let forms = [
             "https://github.com/Dimon94/pagugu.git",
@@ -318,5 +388,100 @@ final class IdentityTests: XCTestCase {
         XCTAssertNotNil(installed)
         XCTAssertNotNil(sourceOnly)
         XCTAssertEqual(sourceOnly?.id, "/Users/dimon/Code/work-in-progress/helper", "零安装单例以安装 Canonical Path 为标识")
+    }
+
+    func testMappingOneInstallationSplitsIdenticalCrossHostPresentationGroup() throws {
+        let root = "/projects/repo"
+        let target = SkillIdentity(
+            sourceKey: .localPath(root),
+            repositoryRelativePath: "skills/source"
+        )
+        let claudePath = "/Users/dimon/.claude/skills/helper"
+        let codexPath = "/Users/dimon/.codex/skills/helper"
+        let result = ScanResult(
+            outcome: .complete,
+            skills: [
+                DiscoveredSkill(
+                    asFoundPath: root + "/skills/source",
+                    canonicalPath: root + "/skills/source",
+                    name: "source",
+                    origin: .projectScanRoot,
+                    repositoryRootPath: root
+                ),
+                DiscoveredSkill(
+                    asFoundPath: claudePath,
+                    canonicalPath: claudePath,
+                    name: "helper",
+                    contentFingerprint: "aa11"
+                ),
+                DiscoveredSkill(
+                    asFoundPath: codexPath,
+                    canonicalPath: codexPath,
+                    name: "helper",
+                    contentFingerprint: "aa11"
+                ),
+            ],
+            issues: [],
+            candidateSourceRoots: [root]
+        )
+
+        let contents = SkillDirectory.contents(
+            from: result,
+            mappings: [
+                claudePath: SourceMappingRecord(
+                    skillSourceKey: target.sourceKey.registryValue,
+                    repositoryRelativePath: target.repositoryRelativePath
+                ),
+            ]
+        )
+
+        let source = try XCTUnwrap(contents.sources.first?.skills.first)
+        XCTAssertEqual(source.installations.map(\.canonicalPath), [claudePath])
+        XCTAssertTrue(source.installations.first?.isManuallyMapped == true)
+        let remaining = try XCTUnwrap(contents.unattributedInstallations.first)
+        XCTAssertEqual(remaining.installations.map(\.canonicalPath), [codexPath])
+        XCTAssertEqual(remaining.id, "sha256:aa11", "指纹只保留呈现分组，不成为映射键")
+    }
+
+    func testManualMappingCannotOverrideUnattributedSymlink() throws {
+        let root = "/projects/repo"
+        let target = SkillIdentity(
+            sourceKey: .localPath(root),
+            repositoryRelativePath: "skills/source"
+        )
+        let linkedTarget = "/outside/copied-skill"
+        let result = ScanResult(
+            outcome: .complete,
+            skills: [
+                DiscoveredSkill(
+                    asFoundPath: root + "/skills/source",
+                    canonicalPath: root + "/skills/source",
+                    name: "source",
+                    origin: .projectScanRoot,
+                    repositoryRootPath: root
+                ),
+                DiscoveredSkill(
+                    asFoundPath: "/Users/dimon/.claude/skills/linked",
+                    canonicalPath: linkedTarget,
+                    name: "linked"
+                ),
+            ],
+            issues: [],
+            candidateSourceRoots: [root]
+        )
+
+        let contents = SkillDirectory.contents(
+            from: result,
+            mappings: [
+                linkedTarget: SourceMappingRecord(
+                    skillSourceKey: target.sourceKey.registryValue,
+                    repositoryRelativePath: target.repositoryRelativePath
+                ),
+            ]
+        )
+
+        XCTAssertEqual(contents.invalidMappings.first?.validity, .invalid(.installationNotCopy))
+        XCTAssertEqual(contents.sources.first?.skills.first?.installations.count, 0)
+        XCTAssertEqual(contents.unattributedInstallations.first?.installations.first?.projectionType, .symlink)
     }
 }

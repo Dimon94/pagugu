@@ -68,6 +68,21 @@ final class PersistenceTests: XCTestCase {
                 expectedKind: .corrupt
             ),
             Case(
+                name: "来源键未规范化",
+                json: #"{"schemaVersion":1,"projectScanRoots":[],"sourceMappings":{"/installation":{"skillSourceKey":"HTTPS://github.com/Owner/repo.git","repositoryRelativePath":"skills/example"}},"checkoutObservations":{}}"#,
+                expectedKind: .corrupt
+            ),
+            Case(
+                name: "来源键含空路径段",
+                json: #"{"schemaVersion":1,"projectScanRoots":[],"sourceMappings":{"/installation":{"skillSourceKey":"github.com//Owner/repo","repositoryRelativePath":"skills/example"}},"checkoutObservations":{}}"#,
+                expectedKind: .corrupt
+            ),
+            Case(
+                name: "点号不是 canonical 仓库根相对路径",
+                json: #"{"schemaVersion":1,"projectScanRoots":[],"sourceMappings":{"/installation":{"skillSourceKey":"/repository","repositoryRelativePath":"."}},"checkoutObservations":{}}"#,
+                expectedKind: .corrupt
+            ),
+            Case(
                 name: "路径未规范化",
                 json: #"{"schemaVersion":1,"projectScanRoots":[{"canonicalPath":"/tmp/../root","asFoundPath":"/root"}],"sourceMappings":{},"checkoutObservations":{}}"#,
                 expectedKind: .corrupt
@@ -111,6 +126,20 @@ final class PersistenceTests: XCTestCase {
                 XCTAssertEqual(try Data(contentsOf: registryURL), originalData)
             }
         }
+    }
+
+    func testSourceMappingAcceptsEmptyRelativePathForSkillAtRepositoryRoot() async throws {
+        let caseDirectory = directoryURL.appendingPathComponent(UUID().uuidString)
+        try fileManager.createDirectory(at: caseDirectory, withIntermediateDirectories: true)
+        let json = #"{"schemaVersion":1,"projectScanRoots":[],"sourceMappings":{"/installation":{"skillSourceKey":"/repository","repositoryRelativePath":""}},"checkoutObservations":{}}"#
+        try Data(json.utf8).write(to: caseDirectory.appendingPathComponent("registry.json"))
+
+        let result = await Persistence(directoryURL: caseDirectory).loadRegistry()
+
+        guard case .ready(let document) = result else {
+            return XCTFail("仓库根 Skill 的空相对路径应是合法 canonical 值")
+        }
+        XCTAssertEqual(document.sourceMappings["/installation"]?.repositoryRelativePath, "")
     }
 
     func testDurableWriteUsesRequiredPermissionsAndDropsUnknownFields() async throws {
@@ -231,6 +260,29 @@ final class PersistenceTests: XCTestCase {
         XCTAssertEqual(resetLoad, .ready(.empty))
         let reloaded = await Persistence(directoryURL: directoryURL).loadRegistry()
         XCTAssertEqual(reloaded, .ready(.empty))
+    }
+
+    func testAuditEvidenceKeepsLatestTwoHundredRecords() async throws {
+        let persistence = Persistence(directoryURL: directoryURL)
+        let target = SourceMappingRecord(
+            skillSourceKey: "github.com/Owner/repo",
+            repositoryRelativePath: "skills/example"
+        )
+
+        for index in 0..<201 {
+            try await persistence.appendAuditEvidence(AuditRecord(
+                id: String(index),
+                recordedAt: Date(timeIntervalSince1970: TimeInterval(index)),
+                outcome: .created,
+                installationCanonicalPath: "/installations/\(index)",
+                target: target
+            ))
+        }
+
+        let audit = await persistence.loadAuditEvidence()
+        XCTAssertEqual(audit.records.count, 200)
+        XCTAssertEqual(audit.records.first?.id, "1")
+        XCTAssertEqual(audit.records.last?.id, "200")
     }
 
     private func document(scanRoot: String) -> RegistryDocument {
