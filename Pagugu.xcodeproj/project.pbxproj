@@ -7,6 +7,16 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D15A00000000000000000061 /* AppModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15A00000000000000000062 /* AppModelTests.swift */; };
+		D15A00000000000000000051 /* SkillReadModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15A00000000000000000052 /* SkillReadModel.swift */; };
+		D15A00000000000000000053 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15A00000000000000000054 /* AppModel.swift */; };
+		D15A00000000000000000041 /* SkillDirectory.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15A00000000000000000042 /* SkillDirectory.swift */; };
+		D15A00000000000000000031 /* AgentHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15A00000000000000000032 /* AgentHost.swift */; };
+		D15A00000000000000000033 /* SkillDirectoryEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15A00000000000000000034 /* SkillDirectoryEntry.swift */; };
+		D15A00000000000000000021 /* SkillDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15A00000000000000000022 /* SkillDiscovery.swift */; };
+		D15A00000000000000000023 /* DiscoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15A00000000000000000024 /* DiscoveryTests.swift */; };
+		D15A00000000000000000012 /* SkillIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15A00000000000000000011 /* SkillIdentity.swift */; };
+		D15A00000000000000000002 /* IdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15A00000000000000000001 /* IdentityTests.swift */; };
 		2F2190FFC541C404FC060850 /* PaguguTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4E55B78FCEBA348B72F43A4 /* PaguguTests.swift */; };
 		AA100000000000000000B001 /* PrototypeSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100000000000000000A001 /* PrototypeSupport.swift */; };
 		AA100000000000000000B002 /* PrototypeSharedUI.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100000000000000000A002 /* PrototypeSharedUI.swift */; };
@@ -36,6 +46,16 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		D15A00000000000000000062 /* AppModelTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppModelTests.swift; sourceTree = "<group>"; };
+		D15A00000000000000000052 /* SkillReadModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SkillReadModel.swift; path = AppModel/SkillReadModel.swift; sourceTree = "<group>"; };
+		D15A00000000000000000054 /* AppModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppModel.swift; path = AppModel/AppModel.swift; sourceTree = "<group>"; };
+		D15A00000000000000000042 /* SkillDirectory.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SkillDirectory.swift; path = Identity/SkillDirectory.swift; sourceTree = "<group>"; };
+		D15A00000000000000000032 /* AgentHost.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AgentHost.swift; path = Identity/AgentHost.swift; sourceTree = "<group>"; };
+		D15A00000000000000000034 /* SkillDirectoryEntry.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SkillDirectoryEntry.swift; path = Identity/SkillDirectoryEntry.swift; sourceTree = "<group>"; };
+		D15A00000000000000000022 /* SkillDiscovery.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SkillDiscovery.swift; path = Discovery/SkillDiscovery.swift; sourceTree = "<group>"; };
+		D15A00000000000000000024 /* DiscoveryTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DiscoveryTests.swift; sourceTree = "<group>"; };
+		D15A00000000000000000011 /* SkillIdentity.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SkillIdentity.swift; path = Identity/SkillIdentity.swift; sourceTree = "<group>"; };
+		D15A00000000000000000001 /* IdentityTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = IdentityTests.swift; sourceTree = "<group>"; };
 		09BE7DE72F107FBC97261DC7 /* ContentView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ContentView.swift; path = Views/ContentView.swift; sourceTree = "<group>"; };
 		AA100000000000000000A001 /* PrototypeSupport.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PrototypeSupport.swift; path = Prototype/PrototypeSupport.swift; sourceTree = "<group>"; };
 		AA100000000000000000A002 /* PrototypeSharedUI.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PrototypeSharedUI.swift; path = Prototype/PrototypeSharedUI.swift; sourceTree = "<group>"; };
@@ -117,6 +137,13 @@
 				09BE7DE72F107FBC97261DC7 /* ContentView.swift */,
 				43D0B6AA900E68DA4F58B8C3 /* MenuBarView.swift */,
 				ADA80321424BDF5F1BDE07CA /* AppIdentity.swift */,
+				D15A00000000000000000011 /* SkillIdentity.swift */,
+				D15A00000000000000000022 /* SkillDiscovery.swift */,
+				D15A00000000000000000032 /* AgentHost.swift */,
+				D15A00000000000000000034 /* SkillDirectoryEntry.swift */,
+				D15A00000000000000000042 /* SkillDirectory.swift */,
+				D15A00000000000000000052 /* SkillReadModel.swift */,
+				D15A00000000000000000054 /* AppModel.swift */,
 				AA100000000000000000A001 /* PrototypeSupport.swift */,
 				AA100000000000000000A002 /* PrototypeSharedUI.swift */,
 				AA100000000000000000A003 /* PrototypeVariantA.swift */,
@@ -135,6 +162,9 @@
 			isa = PBXGroup;
 			children = (
 				C4E55B78FCEBA348B72F43A4 /* PaguguTests.swift */,
+				D15A00000000000000000001 /* IdentityTests.swift */,
+				D15A00000000000000000024 /* DiscoveryTests.swift */,
+				D15A00000000000000000062 /* AppModelTests.swift */,
 			);
 			name = PaguguTests;
 			path = PaguguTests;
@@ -232,6 +262,13 @@
 				40F4734042A82853E4E20514 /* ContentView.swift in Sources */,
 				9B97CCAACAD38E990F2D1F9B /* MenuBarView.swift in Sources */,
 				BC4D31A5D738A9E6AAAB55E0 /* AppIdentity.swift in Sources */,
+				D15A00000000000000000012 /* SkillIdentity.swift in Sources */,
+				D15A00000000000000000021 /* SkillDiscovery.swift in Sources */,
+				D15A00000000000000000031 /* AgentHost.swift in Sources */,
+				D15A00000000000000000033 /* SkillDirectoryEntry.swift in Sources */,
+				D15A00000000000000000041 /* SkillDirectory.swift in Sources */,
+				D15A00000000000000000051 /* SkillReadModel.swift in Sources */,
+				D15A00000000000000000053 /* AppModel.swift in Sources */,
 				AA100000000000000000B001 /* PrototypeSupport.swift in Sources */,
 				AA100000000000000000B002 /* PrototypeSharedUI.swift in Sources */,
 				AA100000000000000000B003 /* PrototypeVariantA.swift in Sources */,
@@ -249,6 +286,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				2F2190FFC541C404FC060850 /* PaguguTests.swift in Sources */,
+				D15A00000000000000000002 /* IdentityTests.swift in Sources */,
+				D15A00000000000000000023 /* DiscoveryTests.swift in Sources */,
+				D15A00000000000000000061 /* AppModelTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -28,9 +28,12 @@ Status: runnable baseline
 | Module | Owns | Does not own | Public interface | Depends on | Verification |
 | --- | --- | --- | --- | --- | --- |
 | PaguguApp | 应用生命周期、主窗口与状态栏场景 | Skill 扫描、Git 状态、持久化 | macOS App 入口 | SwiftUI、AppKit | `script/build_and_run.sh --verify` |
-| ContentView | 基线主窗口内容 | Skill Read Model | SwiftUI `View` | SwiftUI | App build |
+| ContentView | 基线主窗口内容（主从结构：目录 + 详情/欢迎） | Skill Read Model | SwiftUI `View` | SwiftUI | App build |
 | MenuBarView | 打开主窗口与退出动作 | 更新状态和后台调度 | SwiftUI `View` | SwiftUI、AppKit | App build + launch |
 | AppIdentity | 产品展示名、Bundle ID、主窗口 ID | 用户配置 | 静态常量 | Swift 标准库 | `PaguguTests.testProductIdentity` |
+| Discovery | Discovery Scan：遍历 Scan Root、软链接解析、Canonical Path 去重防环、SKILL.md 解析校验、Scan Issue | 身份归因（归 Identity）、Git 子进程 | `Discovery.scanPersonalRoots(_:)`、`Discovery.scanProjectRoot(_:)` | Foundation | `PaguguTests/DiscoveryTests.swift` |
+| Identity | Skill Source Key 规范化、HostAttribution 归因表、按 Skill Identity 聚合 Installation（全部纯函数） | 文件系统遍历、Git 调用、任何副作用 | `SkillSourceKey.normalize(remoteURL:)`、`HostAttribution.hosts(for:)`、`SkillDirectory.entries(from:)` | Foundation | `PaguguTests/IdentityTests.swift` |
+| AppModel | @MainActor composition root：Skill Read Model 只读投影、UI intent 唯一入口、启动与刷新流水线编排 | 直接 Git/文件系统/持久 IO、业务规则重建 | `AppModel.start()`、`AppModel.rescan()` | Discovery、Identity | `PaguguTests/AppModelTests.swift` |
 | build_and_run.sh | kill、build、launch、进程验证 | 签名、公证、发布 | `run|--debug|--logs|--telemetry|--verify` | `xcodebuild`、macOS CLI | `--verify` |
 
 ## 产品不变量
@@ -50,9 +53,9 @@ Status: runnable baseline
 
 ## 明确未实现
 
-- Personal Skill Root 与 Project Scan Root 扫描。
-- `SKILL.md` frontmatter、软链接与插件来源识别。
-- Skill Read Model、每日检查、一键更新与通知。
+- Project Scan Root 管理与持久化（#18 后续票）。
+- `SKILL.md` frontmatter 的完整 Agent Skills 规范校验（name/description 字段违规标注）。
+- Git 状态裁决、检查、更新与审计（#19–#26 后续票）。
 - App Registry JSON。
 - 审计证据（Audit Evidence）持久集合。
 - Logo、签名、公证与发布。
