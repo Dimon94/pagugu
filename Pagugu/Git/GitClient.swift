@@ -33,6 +33,14 @@ struct GitUpstream: Equatable, Sendable {
     let ref: String
     let remoteName: String
     let remoteURL: String?
+    let sha: String?
+
+    init(ref: String, remoteName: String, remoteURL: String?, sha: String? = nil) {
+        self.ref = ref
+        self.remoteName = remoteName
+        self.remoteURL = remoteURL
+        self.sha = sha
+    }
 }
 
 enum GitOperation: String, Hashable, Sendable {
@@ -107,8 +115,13 @@ protocol GitInspecting: Sendable {
     func inspectCheckout(at checkoutPath: String, scope: GitInspectionScope) async -> CheckoutGitFacts
 }
 
+// L4 IN: caller 传同一 upstream 的 remote 名、`<remote>/<branch>` ref 与检出路径。
+// OUT: 只 fetch 该 upstream 分支，更新其 remote-tracking ref 与 FETCH_HEAD。
+// INVARIANT: 不移动工作树、本地 branch 或其他 remote-tracking ref。
+// FAIL: 非交互失败抛 GitCommandError；caller 决定恢复语义。
+// TEST: repo://PaguguTests/GitEligibilityTests.swift（单分支与工作树零改动）。
 protocol GitExecuting: Sendable {
-    func fetch(remote: String, at checkoutPath: String) async throws
+    func fetch(remote: String, upstreamRef: String, at checkoutPath: String) async throws
 }
 
 struct GitCommandOutput: Equatable, Sendable {
@@ -137,10 +150,17 @@ struct GitClient: GitInspecting, GitExecuting, Sendable {
         }.value
     }
 
-    func fetch(remote: String, at checkoutPath: String) async throws {
+    // L5 PAIR: upstreamRef 必须以 `remote/` 开头；不匹配时拒绝启动 Git。
+    func fetch(remote: String, upstreamRef: String, at checkoutPath: String) async throws {
+        let prefix = remote + "/"
+        guard upstreamRef.hasPrefix(prefix), upstreamRef.count > prefix.count else {
+            throw GitCommandError.commandFailed(exitCode: -1, stderr: "上游分支与 remote 不匹配")
+        }
+        let branch = upstreamRef.dropFirst(prefix.count)
+        let refspec = "+refs/heads/\(branch):refs/remotes/\(upstreamRef)"
         _ = try await Task.detached {
             try GitClient.runGit(
-                ["fetch", "--", remote],
+                ["fetch", "--no-tags", "--", remote, refspec],
                 at: checkoutPath,
                 timeoutSeconds: timeoutSeconds
             )
@@ -322,7 +342,24 @@ struct GitClient: GitInspecting, GitExecuting, Sendable {
         let remoteURL = remoteName.isEmpty || remoteName == "."
             ? nil
             : try optionalConfig("remote.\(remoteName).url", at: checkoutPath, timeoutSeconds: timeoutSeconds)
-        return GitUpstream(ref: ref, remoteName: remoteName, remoteURL: remoteURL)
+        let sha = try optionalRefSHA(ref, at: checkoutPath, timeoutSeconds: timeoutSeconds)
+        return GitUpstream(ref: ref, remoteName: remoteName, remoteURL: remoteURL, sha: sha)
+    }
+
+    private static func optionalRefSHA(
+        _ ref: String,
+        at checkoutPath: String,
+        timeoutSeconds: Double
+    ) throws -> String? {
+        let output = try runGit(
+            ["rev-parse", "--verify", "--quiet", ref],
+            at: checkoutPath,
+            timeoutSeconds: timeoutSeconds,
+            acceptedExitCodes: [0, 1]
+        )
+        guard output.exitCode == 0 else { return nil }
+        let sha = output.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return sha.isEmpty ? nil : sha
     }
 
     private static func optionalConfig(

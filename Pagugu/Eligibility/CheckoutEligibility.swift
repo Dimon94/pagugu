@@ -1,7 +1,7 @@
 import Foundation
 
 // L3 COORD: Pagugu/Eligibility/CheckoutEligibility.swift
-// POS: Eligibility 模块（ADR-0004）。owns 12 态 precedence、稳定 reason code、中文名与恢复方向。
+// POS: Eligibility 模块（ADR-0004、ADR-0009）。owns 12 态 precedence、观察身份与新鲜度裁决。
 //      纯函数；does not own Git 调用、持久化或 UI。
 // TEST: repo://PaguguTests/GitEligibilityTests.swift（precedence 真值表）。
 
@@ -77,5 +77,35 @@ enum CheckoutEligibility {
         case .upToDate: return .upToDate
         case .unknown: return .checkUnknown
         }
+    }
+
+    static func identityDigest(
+        facts: CheckoutGitFacts,
+        sourceKey: SkillSourceKey
+    ) -> CheckoutIdentityDigest? {
+        guard case .remoteURL(let normalizedRemoteURL) = sourceKey,
+              let gitCommonDirectory = facts.gitCommonDirectory,
+              let branchName = facts.head?.branchName,
+              let upstream = facts.upstream,
+              upstream.remoteURL.flatMap(SkillSourceKey.normalize(remoteURL:)) == sourceKey else {
+            return nil
+        }
+        return CheckoutIdentityDigest(
+            checkoutCanonicalPath: facts.checkoutPath,
+            gitCommonDirIdentifier: gitCommonDirectory,
+            normalizedRemoteURL: normalizedRemoteURL,
+            branchName: branchName,
+            upstreamRefName: upstream.ref
+        )
+    }
+
+    static func observationIsFresh(
+        _ observation: CheckoutObservation,
+        facts: CheckoutGitFacts,
+        sourceKey: SkillSourceKey
+    ) -> Bool {
+        observation.result == .success &&
+            observation.identityDigest == identityDigest(facts: facts, sourceKey: sourceKey) &&
+            observation.remoteTipSHA == facts.upstream?.sha
     }
 }

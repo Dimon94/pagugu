@@ -523,6 +523,8 @@ final class AppModelTests: XCTestCase {
         } else {
             XCTFail("合法但不可用的 Project Scan Root 必须让扫描保持不完整")
         }
+        XCTAssertFalse(model.canStartCheckRun)
+        XCTAssertTrue(model.checkRunDisabledReason.contains("重新扫描"))
     }
 
     @MainActor
@@ -581,6 +583,66 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(cards.first { $0.id == repoA.path }?.state, .checkUnknown)
         XCTAssertEqual(cards.first { $0.id == repoB.path }?.state, .detached)
         XCTAssertEqual(cards.first { $0.id == repoA.path }?.facts.originRemoteURL, remoteURL)
+    }
+
+    @MainActor
+    func testCheckNowPublishesFreshObservationAndUpdateAvailableState() async throws {
+        let repo = tmp.appendingPathComponent("repo")
+        try makeWorkTree(at: repo)
+        try writeSkill(at: repo.appendingPathComponent("skills/helper"), name: "helper")
+        let remoteURL = "https://example.com/team/skills.git"
+        let initial = checkoutFacts(path: repo.path, remoteURL: remoteURL)
+        let checked = CheckoutGitFacts(
+            checkoutPath: repo.path,
+            gitCommonDirectory: repo.path + "/.git",
+            head: .branch(name: "main", sha: "head"),
+            originRemoteURL: remoteURL,
+            upstream: GitUpstream(
+                ref: "origin/main",
+                remoteName: "origin",
+                remoteURL: remoteURL,
+                sha: "remote-tip"
+            ),
+            dirty: .clean,
+            relativePosition: .behindOnly(1),
+            worktrees: [GitWorktree(path: repo.path, branch: "main")],
+            siblingBranchConflict: false,
+            inspectionFailure: nil
+        )
+        let git = FakeCheckGitClient(initial: initial, checked: checked)
+        let model = AppModel(
+            personalRoots: [repo.path],
+            persistence: Persistence(directoryURL: tmp.appendingPathComponent("data")),
+            gitInspector: git,
+            gitExecutor: git
+        )
+        await model.start()
+        XCTAssertTrue(model.canStartCheckRun)
+
+        await model.checkNow()
+
+        XCTAssertEqual(model.checkRunSummary?.outcome, .complete)
+        XCTAssertNil(model.checkRunProgress)
+        let source = try XCTUnwrap(model.readModel.sources.first)
+        let card = try XCTUnwrap(model.readModel.checkoutCards(for: source.id).first)
+        XCTAssertEqual(card.state, .updateAvailable)
+        XCTAssertEqual(card.observation?.remoteTipSHA, "remote-tip")
+        XCTAssertNotNil(card.observation?.completedAt)
+        let fetchCount = await git.fetchCount
+        XCTAssertEqual(fetchCount, 1)
+
+        let relaunchedGit = FakeCheckGitClient(initial: checked, checked: checked)
+        let relaunched = AppModel(
+            personalRoots: [repo.path],
+            persistence: Persistence(directoryURL: tmp.appendingPathComponent("data")),
+            gitInspector: relaunchedGit,
+            gitExecutor: relaunchedGit
+        )
+        await relaunched.start()
+        let relaunchedSource = try XCTUnwrap(relaunched.readModel.sources.first)
+        let relaunchedCard = try XCTUnwrap(relaunched.readModel.checkoutCards(for: relaunchedSource.id).first)
+        XCTAssertEqual(relaunchedCard.state, .updateAvailable)
+        XCTAssertEqual(relaunchedCard.observation?.remoteTipSHA, "remote-tip")
     }
 
     private func checkoutFacts(
@@ -678,6 +740,25 @@ final class AppModelTests: XCTestCase {
                 siblingBranchConflict: false,
                 inspectionFailure: .notAWorkTree
             )
+        }
+    }
+
+    private actor FakeCheckGitClient: GitInspecting, GitExecuting {
+        let initial: CheckoutGitFacts
+        let checked: CheckoutGitFacts
+        private(set) var fetchCount = 0
+
+        init(initial: CheckoutGitFacts, checked: CheckoutGitFacts) {
+            self.initial = initial
+            self.checked = checked
+        }
+
+        func fetch(remote: String, upstreamRef: String, at checkoutPath: String) async throws {
+            fetchCount += 1
+        }
+
+        func inspectCheckout(at checkoutPath: String, scope: GitInspectionScope) async -> CheckoutGitFacts {
+            scope == .localOnly && fetchCount == 0 ? initial : checked
         }
     }
 }

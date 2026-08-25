@@ -2,8 +2,8 @@ import Foundation
 
 // L3 COORD: Pagugu/AppModel/AppModel.swift
 // POS: AppModel 模块（ADR-0009 §7）。@MainActor composition root：
-//      owns Skill Read Model、受限恢复模式投影、目录收起 UI 状态、全部 UI intent
-//      与启动/刷新编排。does not own 直接 Git/文件系统/持久 IO（经 Git/Discovery/Registry seam）、
+//      owns Skill Read Model、受限恢复模式投影、目录收起与 Check Run 瞬态、全部 UI intent
+//      与启动/刷新编排。does not own 直接 Git/文件系统/持久 IO（经 Git/Discovery/Registry/Runs seam）、
 //      业务规则重建。
 // TEST: repo://PaguguTests/AppModelTests.swift（Registry gate、Project Scan Root intent、
 //      目录投影与 intent 路由 smoke）。
@@ -17,6 +17,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var registryRecovery: RegistryRecovery?
     @Published private(set) var registryReady = false
     @Published private(set) var projectScanRootError: ProjectScanRootError?
+    @Published private(set) var checkRunProgress: CheckRunProgress?
+    @Published private(set) var checkRunSummary: CheckRunSummary?
 
     /// 收起的来源仓库行集合（默认全部展开）。瞬态 UI 状态，不持久化。
     @Published private(set) var collapsedSources: Set<SkillSourceKey> = []
@@ -26,15 +28,21 @@ final class AppModel: ObservableObject {
     private let personalRoots: [String]
     private let registry: AppRegistry
     private let gitInspector: any GitInspecting
+    private let gitExecutor: any GitExecuting
+    private var checkScope: [CheckRunTarget] = []
+    private var checkRunTargetsByPath: [String: CheckRunTarget] = [:]
+    private var checkItemOutcomes: [String: CheckRunItemOutcome] = [:]
 
     init(
         personalRoots: [String] = Discovery.personalSkillRoots,
         persistence: Persistence = .live,
-        gitInspector: any GitInspecting = GitClient()
+        gitInspector: any GitInspecting = GitClient(),
+        gitExecutor: any GitExecuting = GitClient()
     ) {
         self.personalRoots = personalRoots
         self.registry = AppRegistry(persistence: persistence, personalRoots: personalRoots)
         self.gitInspector = gitInspector
+        self.gitExecutor = gitExecutor
     }
 
     // MARK: - 启动流水线（ADR-0009 §13）
@@ -50,6 +58,7 @@ final class AppModel: ObservableObject {
             registryRecovery = recovery
             registryReady = false
             readModel = .empty()
+            checkScope = []
         }
     }
 
@@ -62,19 +71,53 @@ final class AppModel: ObservableObject {
         let checkoutPaths = Set(scanResult.skills.compactMap(\.repositoryRootPath)).sorted()
         var factsByCheckoutPath: [String: CheckoutGitFacts] = [:]
         for path in checkoutPaths {
-            // #19 尚无 Check Run/Observation 接线。相对位置保持 Unknown，裁决为「尚未检查」。
+            // local-only 先读实时身份与 remote-tracking SHA；新鲜成功观察才解锁相对位置。
             factsByCheckoutPath[path] = await gitInspector.inspectCheckout(at: path, scope: .localOnly)
         }
         let contents = SkillDirectory.contents(
             from: scanResult,
             gitFactsByCheckoutPath: factsByCheckoutPath
         )
+        let observations = await registry.checkoutObservations()
+        for source in contents.sources {
+            for checkout in source.checkouts {
+                guard let observation = observations[checkout.canonicalPath],
+                      let localFacts = factsByCheckoutPath[checkout.canonicalPath],
+                      CheckoutEligibility.observationIsFresh(
+                          observation,
+                          facts: localFacts,
+                          sourceKey: source.id
+                      ) else { continue }
+                let checkedFacts = await gitInspector.inspectCheckout(
+                    at: checkout.canonicalPath,
+                    scope: .afterSuccessfulCheck
+                )
+                if CheckoutEligibility.observationIsFresh(
+                    observation,
+                    facts: checkedFacts,
+                    sourceKey: source.id
+                ) {
+                    factsByCheckoutPath[checkout.canonicalPath] = checkedFacts
+                }
+            }
+        }
         let checkoutCardsBySource = Dictionary(uniqueKeysWithValues: contents.sources.map { source in
             let cards = source.checkouts.compactMap { checkout -> CheckoutCardReadModel? in
                 guard let facts = factsByCheckoutPath[checkout.canonicalPath] else { return nil }
+                let currentTarget = CheckRunTarget(sourceKey: source.id, facts: facts)
+                let belongsToDisplayedRun = checkRunTargetsByPath[checkout.canonicalPath]?
+                    .matches(currentTarget) ?? false
+                let checkOutcome = belongsToDisplayedRun
+                    ? checkItemOutcomes[checkout.canonicalPath]
+                    : nil
                 return CheckoutCardReadModel(
                     facts: facts,
-                    state: CheckoutEligibility.evaluate(facts: facts, sourceKey: source.id)
+                    state: CheckoutEligibility.evaluate(facts: facts, sourceKey: source.id),
+                    observation: observations[checkout.canonicalPath],
+                    checkOutcome: checkOutcome,
+                    isChecking: checkRunProgress != nil &&
+                        belongsToDisplayedRun && checkOutcome == nil &&
+                        CheckRunner.notApplicableState(for: currentTarget) == nil
                 )
             }
             return (source.id, cards)
@@ -87,6 +130,13 @@ final class AppModel: ObservableObject {
             projectScanRoots: projectScanRoots,
             checkoutCardsBySource: checkoutCardsBySource
         )
+        checkScope = contents.sources.flatMap { source in
+            source.checkouts.compactMap { checkout in
+                factsByCheckoutPath[checkout.canonicalPath].map {
+                    CheckRunTarget(sourceKey: source.id, facts: $0)
+                }
+            }
+        }
     }
 
     // MARK: - UI Intents
@@ -95,6 +145,56 @@ final class AppModel: ObservableObject {
     func rescan() async {
         guard registryReady, registryRecovery == nil else { return }
         await publishDiscovery()
+    }
+
+    var canStartCheckRun: Bool {
+        guard registryReady, registryRecovery == nil, checkRunProgress == nil else { return false }
+        if case .complete = readModel.scanOutcome { return true }
+        return false
+    }
+
+    var checkRunDisabledReason: String {
+        if checkRunProgress != nil { return "检查正在运行。请等待本次全量检查完成。" }
+        if case .complete = readModel.scanOutcome { return "" }
+        return "Discovery Scan 不完整。请重新扫描或处理 Scan Issue 后再检查。"
+    }
+
+    /// MVP 唯一手动检查入口。scope 在调用时复制冻结；run 瞬态不持久。
+    func checkNow() async {
+        guard canStartCheckRun else { return }
+        let frozenScope = checkScope
+        checkRunSummary = nil
+        checkItemOutcomes = [:]
+        checkRunTargetsByPath = frozenScope.reduce(into: [:]) { result, target in
+            result[target.facts.checkoutPath] = target
+        }
+        checkRunProgress = CheckRunProgress(
+            completed: 0,
+            total: frozenScope.count { CheckRunner.notApplicableState(for: $0) == nil }
+        )
+        let runner = CheckRunner(
+            gitInspector: gitInspector,
+            gitExecutor: gitExecutor,
+            registry: registry
+        )
+        for await event in runner.startCheck(scope: frozenScope) {
+            switch event {
+            case .started(let progress):
+                checkRunProgress = progress
+                await publishDiscovery()
+            case .item(let item, let progress):
+                checkItemOutcomes[item.checkoutPath] = item.outcome
+                checkRunProgress = progress
+                await publishDiscovery()
+            case .finished(let summary):
+                checkRunSummary = summary
+                checkRunProgress = nil
+            }
+        }
+    }
+
+    func dismissCheckRunSummary() {
+        checkRunSummary = nil
     }
 
     func addProjectScanRoot(_ url: URL) async {

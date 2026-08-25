@@ -2,8 +2,8 @@ import Foundation
 
 // L3 COORD: Pagugu/Registry/Registry.swift
 // INPUT: 用户选择的目录 URL、Personal Skill Root 与 Persistence 的 RegistryDocument。
-// OUTPUT: 按序、无丢失持久化的 Project Scan Root 主张与实时合法性/可用性投影。
-// POS: Registry 语义 owner。拥有串行 mutation、护栏、主张生命周期；不拥有物理 IO、Discovery 与 UI。
+// OUTPUT: 按序、无丢失持久化的 Project Scan Root 主张、Checkout Observation 与实时投影。
+// POS: Registry 语义 owner。拥有串行 mutation、护栏、主张与观察单槽；不拥有物理 IO、Discovery 与 UI。
 // TEST: repo://PaguguTests/RegistryTests.swift。
 
 struct ProjectScanRoot: Identifiable, Equatable, Sendable {
@@ -139,6 +139,27 @@ actor AppRegistry {
                 unavailableReason: guardrailError?.reason ?? (isAvailable ? nil : "目录不存在或不可读")
             )
         } ?? []
+    }
+
+    func checkoutObservations() -> [String: CheckoutObservation] {
+        document?.checkoutObservations ?? [:]
+    }
+
+    /// 逐检出单槽替换。durable write 成功后才提交内存投影。
+    func recordCheckoutObservation(_ observation: CheckoutObservation) async throws {
+        await beginMutation()
+        defer { endMutation() }
+        guard let document else { throw PersistenceError.notLoaded }
+        var observations = document.checkoutObservations
+        observations[observation.identityDigest.checkoutCanonicalPath] = observation
+        let updated = RegistryDocument(
+            schemaVersion: document.schemaVersion,
+            projectScanRoots: document.projectScanRoots,
+            sourceMappings: document.sourceMappings,
+            checkoutObservations: observations
+        )
+        try await persistence.saveRegistry(updated)
+        self.document = updated
     }
 
     func reset(confirmed: Bool) async throws -> URL? {

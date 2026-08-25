@@ -1,8 +1,8 @@
 import Foundation
 
 // L3 COORD: Pagugu/AppModel/SkillReadModel.swift
-// POS: AppModel 模块（ADR-0009 §7）。owns Skill Read Model 只读投影、目录状态短语与五档排序。
-// TEST: repo://PaguguTests/AppModelTests.swift（投影形状、目录状态短语与排序表测试）。
+// POS: AppModel 模块（ADR-0009 §7）。owns Skill Read Model、Check Run 投影、目录状态短语与五档排序。
+// TEST: repo://PaguguTests/AppModelTests.swift（投影形状、Check Run、目录状态短语与排序表测试）。
 
 /// Skill Read Model：AppModel 发布的只读投影，View 只消费不重建。
 struct SkillReadModel: Sendable {
@@ -154,6 +154,23 @@ struct SkillReadModel: Sendable {
 struct CheckoutCardReadModel: Identifiable, Sendable {
     let facts: CheckoutGitFacts
     let state: CheckoutGitState
+    let observation: CheckoutObservation?
+    let checkOutcome: CheckRunItemOutcome?
+    let isChecking: Bool
+
+    init(
+        facts: CheckoutGitFacts,
+        state: CheckoutGitState,
+        observation: CheckoutObservation? = nil,
+        checkOutcome: CheckRunItemOutcome? = nil,
+        isChecking: Bool = false
+    ) {
+        self.facts = facts
+        self.state = state
+        self.observation = observation
+        self.checkOutcome = checkOutcome
+        self.isChecking = isChecking
+    }
 
     var id: String { facts.checkoutPath }
 }

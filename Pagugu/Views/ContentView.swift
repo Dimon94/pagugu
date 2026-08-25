@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 //      + 无仓库可归行（来源不明）；消费 Skill Read Model 给出的逐态短语与五档顺序；无分组标题、无筛选 UI。
 //      右侧：Skill 详情四块（状态与检出、安装位置、来源标识、SKILL.md 原文只读可选中）；
 //      空选择回欢迎引导。「相关记录」「更新动作」块归后续票。
-//      工具栏管理 Project Scan Root；Registry 故障由全窗口门面接管。
+//      工具栏提供全量手动检查与 Project Scan Root 管理；Registry 故障由全窗口门面接管。
 //      View 只消费 Skill Read Model、只发 AppModel intent，不做 IO。
 // TEST: repo://PaguguTests/AppModelTests.swift（AppModel 正常/阻断投影与 intent 路由 smoke）。
 
@@ -87,9 +87,36 @@ struct ContentView: View {
                 selection: $selection
             )
         } detail: {
-            detailView
+            VStack(spacing: 0) {
+                if let progress = model.checkRunProgress {
+                    CheckRunBanner(progress: progress, summary: nil, onDismiss: nil)
+                } else if let summary = model.checkRunSummary {
+                    CheckRunBanner(
+                        progress: nil,
+                        summary: summary,
+                        onDismiss: model.dismissCheckRunSummary
+                    )
+                }
+                detailView
+            }
         }
         .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                if let progress = model.checkRunProgress {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("检查中 \(progress.completed)/\(progress.total)")
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Button("检查更新", systemImage: "arrow.triangle.2.circlepath") {
+                        Task { await model.checkNow() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!model.canStartCheckRun)
+                    .help(model.canStartCheckRun ? "全量检查当前完整 Scan Result 中的检出。" : model.checkRunDisabledReason)
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button("扫描范围", systemImage: "folder.badge.gearshape") {
                     showsProjectScanRoots = true
@@ -136,6 +163,55 @@ struct ContentView: View {
     private var welcomePanel: some View {
         WelcomePanel {
             showsProjectRootImporter = true
+        }
+    }
+}
+
+private struct CheckRunBanner: View {
+    let progress: CheckRunProgress?
+    let summary: CheckRunSummary?
+    let onDismiss: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: iconName)
+                .foregroundStyle(color)
+            Text(text)
+            Spacer()
+            if let onDismiss {
+                Button("关闭", systemImage: "xmark", action: onDismiss)
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.plain)
+            }
+        }
+        .font(.callout)
+        .padding(10)
+        .background(color.opacity(0.10))
+    }
+
+    private var text: String {
+        if let progress { return "检查中 \(progress.completed)/\(progress.total)" }
+        guard let summary else { return "Unknown" }
+        return "\(summary.outcome.rawValue) · 成功 \(summary.succeeded) · 失败 \(summary.failed) · 不适用 \(summary.skipped)"
+    }
+
+    private var iconName: String {
+        if progress != nil { return "arrow.triangle.2.circlepath" }
+        switch summary?.outcome {
+        case .complete: return "checkmark.circle"
+        case .partial: return "exclamationmark.triangle"
+        case .failed: return "xmark.circle"
+        case nil: return "questionmark.circle"
+        }
+    }
+
+    private var color: Color {
+        if progress != nil { return .blue }
+        switch summary?.outcome {
+        case .complete: return .green
+        case .partial: return .orange
+        case .failed: return .red
+        case nil: return .secondary
         }
     }
 }
@@ -584,6 +660,22 @@ private struct CheckoutCard: View {
             Text(checkout.state.recoveryDirection)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            if checkout.isChecking {
+                Label("检查中", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.caption)
+                    .foregroundStyle(.blue)
+            }
+            if let outcome = checkout.checkOutcome {
+                checkOutcome(outcome)
+            }
+            if checkout.observation?.result == .failure, checkout.checkOutcome == nil {
+                Text(CheckRunFailure.fetchFailed.message)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+            if let observation = checkout.observation {
+                fact("观察时间", observation.completedAt.formatted(date: .abbreviated, time: .standard))
+            }
             fact("检出路径", checkout.facts.checkoutPath)
             fact("Git common dir", checkout.facts.gitCommonDirectory ?? "Unknown")
             fact("HEAD", headText)
@@ -599,6 +691,26 @@ private struct CheckoutCard: View {
         }
         .padding(10)
         .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder
+    private func checkOutcome(_ outcome: CheckRunItemOutcome) -> some View {
+        switch outcome {
+        case .success:
+            EmptyView()
+        case .notApplicable:
+            Text("本次检查：不适用")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .failed(let reason):
+            Text(reason.message)
+                .font(.caption)
+                .foregroundStyle(.red)
+        case .discarded:
+            Text("检查期间检出身份已变化。本次观察已丢弃；请重新检查。")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
     }
 
     private func fact(_ name: String, _ value: String) -> some View {

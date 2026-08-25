@@ -205,7 +205,7 @@ final class GitEligibilityTests: XCTestCase {
         let started = ContinuousClock.now
 
         do {
-            try await client.fetch(remote: "origin", at: repository.repo.path)
+            try await client.fetch(remote: "origin", upstreamRef: "origin/main", at: repository.repo.path)
             XCTFail("需要终端输入的 transport 必须失败")
         } catch let error as GitCommandError {
             XCTAssertEqual(error, .timedOut(seconds: 1))
@@ -233,7 +233,7 @@ final class GitEligibilityTests: XCTestCase {
         try FileManager.default.removeItem(at: evidence)
         try advanceRemote(repository)
 
-        try await GitClient().fetch(remote: "origin", at: repository.repo.path)
+        try await GitClient().fetch(remote: "origin", upstreamRef: "origin/main", at: repository.repo.path)
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: evidence.path))
     }
@@ -242,13 +242,38 @@ final class GitEligibilityTests: XCTestCase {
         let repository = try makeRepository(named: "option-like-remote")
 
         do {
-            try await GitClient().fetch(remote: "--all", at: repository.repo.path)
+            try await GitClient().fetch(remote: "--all", upstreamRef: "--all/main", at: repository.repo.path)
             XCTFail("类选项 remote 不得扩大为 fetch --all")
         } catch let error as GitCommandError {
             guard case .commandFailed = error else {
                 return XCTFail("应按单 remote 失败，实际为 \(error)")
             }
         }
+    }
+
+    func testFetchMovesOnlyRemoteTrackingRef() async throws {
+        let repository = try makeRepository(named: "fetch-side-effect")
+        try git(["checkout", "-b", "other"], at: repository.repo)
+        try commitChange("other-initial", in: repository.repo)
+        try git(["push", "-u", "origin", "other"], at: repository.repo)
+        try git(["checkout", "main"], at: repository.repo)
+        try advanceRemote(repository)
+        try advanceRemote(repository, branch: "other")
+        let branchBefore = try git(["branch", "--show-current"], at: repository.repo)
+        let headBefore = try git(["rev-parse", "HEAD"], at: repository.repo)
+        let statusBefore = try git(["status", "--porcelain"], at: repository.repo)
+        let fileBefore = try Data(contentsOf: repository.repo.appendingPathComponent("tracked.txt"))
+        let remoteBefore = try git(["rev-parse", "origin/main"], at: repository.repo)
+        let unrelatedRemoteBefore = try git(["rev-parse", "origin/other"], at: repository.repo)
+
+        try await GitClient().fetch(remote: "origin", upstreamRef: "origin/main", at: repository.repo.path)
+
+        XCTAssertEqual(try git(["branch", "--show-current"], at: repository.repo), branchBefore)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"], at: repository.repo), headBefore)
+        XCTAssertEqual(try git(["status", "--porcelain"], at: repository.repo), statusBefore)
+        XCTAssertEqual(try Data(contentsOf: repository.repo.appendingPathComponent("tracked.txt")), fileBefore)
+        XCTAssertNotEqual(try git(["rev-parse", "origin/main"], at: repository.repo), remoteBefore)
+        XCTAssertEqual(try git(["rev-parse", "origin/other"], at: repository.repo), unrelatedRemoteBefore)
     }
 
     private func facts(
@@ -311,13 +336,13 @@ final class GitEligibilityTests: XCTestCase {
         return Repository(repo: repo, remoteURL: "file://localhost\(remote.path)")
     }
 
-    private func advanceRemote(_ repository: Repository) throws {
+    private func advanceRemote(_ repository: Repository, branch: String = "main") throws {
         let peer = scratch.appendingPathComponent(UUID().uuidString)
-        try git(["clone", "--branch", "main", repository.remoteURL, peer.path], at: scratch)
+        try git(["clone", "--branch", branch, repository.remoteURL, peer.path], at: scratch)
         try git(["config", "user.name", "Pagugu Test"], at: peer)
         try git(["config", "user.email", "pagugu@example.invalid"], at: peer)
-        try commitChange("remote", in: peer)
-        try git(["push", "origin", "main"], at: peer)
+        try commitChange("remote-\(branch)", in: peer)
+        try git(["push", "origin", branch], at: peer)
     }
 
     private func commitChange(_ value: String, in repo: URL) throws {

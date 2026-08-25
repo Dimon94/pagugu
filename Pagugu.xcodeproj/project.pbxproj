@@ -15,6 +15,8 @@
 		D19000000000000000000001 /* GitEligibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19000000000000000000002 /* GitEligibilityTests.swift */; };
 		D19000000000000000000003 /* GitClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19000000000000000000004 /* GitClient.swift */; };
 		D19000000000000000000005 /* CheckoutEligibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19000000000000000000006 /* CheckoutEligibility.swift */; };
+		D21000000000000000000001 /* CheckRunTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D21000000000000000000002 /* CheckRunTests.swift */; };
+		D21000000000000000000003 /* CheckRun.swift in Sources */ = {isa = PBXBuildFile; fileRef = D21000000000000000000004 /* CheckRun.swift */; };
 		D15A00000000000000000051 /* SkillReadModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15A00000000000000000052 /* SkillReadModel.swift */; };
 		D15A00000000000000000053 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15A00000000000000000054 /* AppModel.swift */; };
 		D15A00000000000000000041 /* SkillDirectory.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15A00000000000000000042 /* SkillDirectory.swift */; };
@@ -61,6 +63,8 @@
 		D19000000000000000000002 /* GitEligibilityTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = GitEligibilityTests.swift; sourceTree = "<group>"; };
 		D19000000000000000000004 /* GitClient.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = GitClient.swift; path = Git/GitClient.swift; sourceTree = "<group>"; };
 		D19000000000000000000006 /* CheckoutEligibility.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CheckoutEligibility.swift; path = Eligibility/CheckoutEligibility.swift; sourceTree = "<group>"; };
+		D21000000000000000000002 /* CheckRunTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CheckRunTests.swift; sourceTree = "<group>"; };
+		D21000000000000000000004 /* CheckRun.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CheckRun.swift; path = Runs/CheckRun.swift; sourceTree = "<group>"; };
 		D15A00000000000000000052 /* SkillReadModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SkillReadModel.swift; path = AppModel/SkillReadModel.swift; sourceTree = "<group>"; };
 		D15A00000000000000000054 /* AppModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppModel.swift; path = AppModel/AppModel.swift; sourceTree = "<group>"; };
 		D15A00000000000000000042 /* SkillDirectory.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SkillDirectory.swift; path = Identity/SkillDirectory.swift; sourceTree = "<group>"; };
@@ -162,6 +166,7 @@
 				D15A00000000000000000054 /* AppModel.swift */,
 				D19000000000000000000004 /* GitClient.swift */,
 				D19000000000000000000006 /* CheckoutEligibility.swift */,
+				D21000000000000000000004 /* CheckRun.swift */,
 				AA100000000000000000A001 /* PrototypeSupport.swift */,
 				AA100000000000000000A002 /* PrototypeSharedUI.swift */,
 				AA100000000000000000A003 /* PrototypeVariantA.swift */,
@@ -186,6 +191,7 @@
 				D15A00000000000000000024 /* DiscoveryTests.swift */,
 				D15A00000000000000000062 /* AppModelTests.swift */,
 				D19000000000000000000002 /* GitEligibilityTests.swift */,
+				D21000000000000000000002 /* CheckRunTests.swift */,
 			);
 			name = PaguguTests;
 			path = PaguguTests;
@@ -294,6 +300,7 @@
 				D15A00000000000000000053 /* AppModel.swift in Sources */,
 				D19000000000000000000003 /* GitClient.swift in Sources */,
 				D19000000000000000000005 /* CheckoutEligibility.swift in Sources */,
+				D21000000000000000000003 /* CheckRun.swift in Sources */,
 				AA100000000000000000B001 /* PrototypeSupport.swift in Sources */,
 				AA100000000000000000B002 /* PrototypeSharedUI.swift in Sources */,
 				AA100000000000000000B003 /* PrototypeVariantA.swift in Sources */,
@@ -317,6 +324,7 @@
 				D15A00000000000000000023 /* DiscoveryTests.swift in Sources */,
 				D15A00000000000000000061 /* AppModelTests.swift in Sources */,
 				D19000000000000000000001 /* GitEligibilityTests.swift in Sources */,
+				D21000000000000000000001 /* CheckRunTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
