@@ -302,6 +302,29 @@ final class GitEligibilityTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: evidence.path))
     }
 
+    func testFastForwardAppliesExactFetchedSHAWithoutRunningPostMergeHook() async throws {
+        let repository = try makeRepository(named: "fast-forward-hook")
+        let evidence = scratch.appendingPathComponent("post-merge-ran")
+        let hook = try gitPath("hooks/post-merge", in: repository.repo)
+        try write("#!/bin/sh\ntouch '\(evidence.path)'\n", to: hook)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hook.path)
+        try advanceRemote(repository)
+        let client = GitClient()
+        try await client.fetch(remote: "origin", upstreamRef: "origin/main", at: repository.repo.path)
+        let targetSHA = try git(["rev-parse", "origin/main"], at: repository.repo)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        try await client.fastForward(to: targetSHA, at: repository.repo.path)
+
+        XCTAssertEqual(
+            try git(["rev-parse", "HEAD"], at: repository.repo)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            targetSHA
+        )
+        XCTAssertEqual(try git(["status", "--porcelain"], at: repository.repo), "")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: evidence.path))
+    }
+
     func testFetchTreatsRemoteAsAValueNotAnOption() async throws {
         let repository = try makeRepository(named: "option-like-remote")
 

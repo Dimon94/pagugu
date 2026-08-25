@@ -8,7 +8,7 @@ import Foundation
 // TEST: repo://PaguguTests/PersistenceTests.swift、repo://PaguguTests/CheckRunTests.swift。
 
 // L5 PARAM: Registry/Audit schemaVersion 当前只接受 1；Audit FIFO 上限 200。
-// Audit action 为 source-mapping 或 check-run；Check Run 只存 complete/partial/failed 与 scope 计数。
+// Audit action 为 source-mapping / check-run / update-run；Update start 无 outcome，success terminal 有 outcome。
 // Registry 顶层恰好编码三类集合；未知字段可忽略且重写不保留。
 // PAIR: CheckoutObservation success 必须有 remoteTipSHA；failure 必须没有。
 // FAIL: 缺字段、类型不符、路径/身份配对无效均走损坏 quarantine。
@@ -118,6 +118,7 @@ struct AuditRecord: Codable, Equatable, Sendable {
     enum Action: String, Codable, Equatable, Sendable {
         case sourceMapping = "source-mapping"
         case checkRun = "check-run"
+        case updateRun = "update-run"
     }
 
     enum Outcome: String, Codable, Equatable, Sendable {
@@ -126,6 +127,12 @@ struct AuditRecord: Codable, Equatable, Sendable {
         case complete
         case partial
         case failed
+        case success
+    }
+
+    enum UpdateRunPhase: String, Codable, Equatable, Sendable {
+        case started
+        case terminal
     }
 
     struct CheckRunScope: Codable, Equatable, Sendable {
@@ -140,13 +147,49 @@ struct AuditRecord: Codable, Equatable, Sendable {
         }
     }
 
+    struct SkillIdentitySnapshot: Codable, Equatable, Sendable {
+        let skillSourceKey: String
+        let repositoryRelativePath: String
+
+        fileprivate var isValid: Bool {
+            isNormalizedSkillSourceKey(skillSourceKey) &&
+                isNormalizedRelativePath(repositoryRelativePath)
+        }
+    }
+
+    struct UpdateRunPlan: Codable, Equatable, Sendable {
+        let skillIdentity: SkillIdentitySnapshot
+        let checkoutCanonicalPath: String
+        let branchName: String
+        let upstreamRefName: String
+        let currentHeadSHA: String
+        let targetSHA: String
+        let behindCount: Int
+        let affectedSkills: [SkillIdentitySnapshot]
+
+        fileprivate var isValid: Bool {
+            skillIdentity.isValid &&
+                isNormalizedAbsolutePath(checkoutCanonicalPath) &&
+                !branchName.isEmpty && !upstreamRefName.isEmpty &&
+                isFullGitSHA(currentHeadSHA) && isFullGitSHA(targetSHA) &&
+                currentHeadSHA != targetSHA && behindCount > 0 &&
+                !affectedSkills.isEmpty && affectedSkills.allSatisfy(\.isValid) &&
+                affectedSkills.allSatisfy({ $0.skillSourceKey == skillIdentity.skillSourceKey }) &&
+                Set(affectedSkills.map { "\($0.skillSourceKey)\u{0}\($0.repositoryRelativePath)" }).count == affectedSkills.count &&
+                affectedSkills.contains(skillIdentity)
+        }
+    }
+
     let id: String
     let recordedAt: Date
     let action: Action
-    let outcome: Outcome
+    let outcome: Outcome?
     let installationCanonicalPath: String?
     let target: SourceMappingRecord?
     let checkRunScope: CheckRunScope?
+    let updateRunID: String?
+    let updateRunPhase: UpdateRunPhase?
+    let updateRunPlan: UpdateRunPlan?
 
     init(
         id: String,
@@ -162,6 +205,9 @@ struct AuditRecord: Codable, Equatable, Sendable {
         self.installationCanonicalPath = installationCanonicalPath
         self.target = target
         self.checkRunScope = nil
+        self.updateRunID = nil
+        self.updateRunPhase = nil
+        self.updateRunPlan = nil
     }
 
     init(
@@ -177,6 +223,29 @@ struct AuditRecord: Codable, Equatable, Sendable {
         self.installationCanonicalPath = nil
         self.target = nil
         self.checkRunScope = checkRunScope
+        self.updateRunID = nil
+        self.updateRunPhase = nil
+        self.updateRunPlan = nil
+    }
+
+    init(
+        id: String,
+        recordedAt: Date,
+        updateRunID: String,
+        phase: UpdateRunPhase,
+        plan: UpdateRunPlan,
+        outcome: Outcome? = nil
+    ) {
+        self.id = id
+        self.recordedAt = recordedAt
+        self.action = .updateRun
+        self.outcome = outcome
+        self.installationCanonicalPath = nil
+        self.target = nil
+        self.checkRunScope = nil
+        self.updateRunID = updateRunID
+        self.updateRunPhase = phase
+        self.updateRunPlan = plan
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -187,19 +256,25 @@ struct AuditRecord: Codable, Equatable, Sendable {
         case installationCanonicalPath
         case target
         case checkRunScope
+        case updateRunID
+        case updateRunPhase
+        case updateRunPlan
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
         recordedAt = try container.decode(Date.self, forKey: .recordedAt)
-        outcome = try container.decode(Outcome.self, forKey: .outcome)
+        outcome = try container.decodeIfPresent(Outcome.self, forKey: .outcome)
         installationCanonicalPath = try container.decodeIfPresent(
             String.self,
             forKey: .installationCanonicalPath
         )
         target = try container.decodeIfPresent(SourceMappingRecord.self, forKey: .target)
         checkRunScope = try container.decodeIfPresent(CheckRunScope.self, forKey: .checkRunScope)
+        updateRunID = try container.decodeIfPresent(String.self, forKey: .updateRunID)
+        updateRunPhase = try container.decodeIfPresent(UpdateRunPhase.self, forKey: .updateRunPhase)
+        updateRunPlan = try container.decodeIfPresent(UpdateRunPlan.self, forKey: .updateRunPlan)
         action = try container.decodeIfPresent(Action.self, forKey: .action) ?? .sourceMapping
     }
 
@@ -210,16 +285,18 @@ struct AuditRecord: Codable, Equatable, Sendable {
             guard outcome == .created || outcome == .deleted,
                   let installationCanonicalPath,
                   let target,
-                  checkRunScope == nil else { return false }
+                  checkRunScope == nil,
+                  updateRunID == nil, updateRunPhase == nil, updateRunPlan == nil else { return false }
             return isNormalizedAbsolutePath(installationCanonicalPath) &&
                 isNormalizedSkillSourceKey(target.skillSourceKey) &&
                 isNormalizedRelativePath(target.repositoryRelativePath)
         case .checkRun:
-            guard [.complete, .partial, .failed].contains(outcome),
+            guard let outcome, [.complete, .partial, .failed].contains(outcome),
                   installationCanonicalPath == nil,
                   target == nil,
                   let checkRunScope,
-                  checkRunScope.isValid else { return false }
+                  checkRunScope.isValid,
+                  updateRunID == nil, updateRunPhase == nil, updateRunPlan == nil else { return false }
             switch outcome {
             case .complete:
                 return checkRunScope.failedCount == 0
@@ -227,8 +304,18 @@ struct AuditRecord: Codable, Equatable, Sendable {
                 return checkRunScope.succeededCount > 0 && checkRunScope.failedCount > 0
             case .failed:
                 return checkRunScope.succeededCount == 0 && checkRunScope.failedCount > 0
-            case .created, .deleted:
+            case .created, .deleted, .success:
                 return false
+            }
+        case .updateRun:
+            guard installationCanonicalPath == nil, target == nil, checkRunScope == nil,
+                  let updateRunID, !updateRunID.isEmpty,
+                  let updateRunPhase, let updateRunPlan, updateRunPlan.isValid else { return false }
+            switch updateRunPhase {
+            case .started:
+                return outcome == nil
+            case .terminal:
+                return outcome == .success
             }
         }
     }
@@ -279,6 +366,10 @@ private func isNormalizedRelativePath(_ path: String) -> Bool {
     path.isEmpty || (!path.hasPrefix("/") && path != "." &&
         !(path as NSString).pathComponents.contains("..") &&
         (path as NSString).standardizingPath == path)
+}
+
+private func isFullGitSHA(_ value: String) -> Bool {
+    [40, 64].contains(value.count) && value.allSatisfy(\.isHexDigit)
 }
 
 private func isNormalizedSkillSourceKey(_ value: String) -> Bool {

@@ -3,7 +3,7 @@ import Foundation
 // L3 COORD: Pagugu/Identity/SkillDirectory.swift
 // POS: Identity 模块（纯函数，ADR-0009 §2）。owns 按 Skill Identity 聚合 Installation、
 //      按 Skill Source 分组目录（Variant F：来源仓库行 + 无仓库可归行）、
-//      同一 remote 多检出保留、复制投影指纹呈现组与人工来源映射事实投影。
+//      同一 remote 多检出及其各自 Skill 成员清单、复制投影指纹呈现组与人工来源映射事实投影。
 // TEST: repo://PaguguTests/IdentityTests.swift（分组、检出与映射生命周期表测试）。
 // IN: ScanResult + 每个候选检出根的实时 Git Fact + Registry 来源映射主张；
 // OUT: SkillDirectoryContents（Skill Read Model 消费）。
@@ -12,6 +12,7 @@ enum SkillDirectory {
     private struct SourceAccumulator {
         var checkoutsByPath: [String: SkillSourceCheckout] = [:]
         var entriesByIdentity: [SkillIdentity: SkillDirectoryEntry] = [:]
+        var skillIdentitiesByCheckoutPath: [String: Set<SkillIdentity>] = [:]
     }
 
     /// 将 Discovery Scan 聚合为 Variant F 目录。Git Fact 只决定 Source Key；
@@ -54,6 +55,7 @@ enum SkillDirectory {
             let installations = value.installations.sorted { $0.asFoundPath < $1.asFoundPath }
             var source = sourcesByKey[key] ?? SourceAccumulator()
             source.checkoutsByPath[root] = SkillSourceCheckout(canonicalPath: root)
+            source.skillIdentitiesByCheckoutPath[root, default: []].insert(identity)
             if let existing = source.entriesByIdentity[identity] {
                 source.entriesByIdentity[identity] = SkillDirectoryEntry(
                     id: identity,
@@ -143,7 +145,15 @@ enum SkillDirectory {
                         ? $0.id.repositoryRelativePath < $1.id.repositoryRelativePath
                         : $0.displayName < $1.displayName
                 },
-                checkouts: source.checkoutsByPath.values.sorted { $0.canonicalPath < $1.canonicalPath }
+                checkouts: source.checkoutsByPath.values.sorted { $0.canonicalPath < $1.canonicalPath },
+                checkoutSkillInventories: source.skillIdentitiesByCheckoutPath.map { path, identities in
+                    CheckoutSkillInventory(
+                        checkoutCanonicalPath: path,
+                        skillIdentities: identities.sorted {
+                            $0.repositoryRelativePath < $1.repositoryRelativePath
+                        }
+                    )
+                }.sorted { $0.checkoutCanonicalPath < $1.checkoutCanonicalPath }
             )
         }
         .sorted {

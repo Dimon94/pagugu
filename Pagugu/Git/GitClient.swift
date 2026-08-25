@@ -115,13 +115,14 @@ protocol GitInspecting: Sendable {
     func inspectCheckout(at checkoutPath: String, scope: GitInspectionScope) async -> CheckoutGitFacts
 }
 
-// L4 IN: caller 传同一 upstream 的 remote 名、`<remote>/<branch>` ref 与检出路径。
-// OUT: 只 fetch 该 upstream 分支，更新其 remote-tracking ref 与 FETCH_HEAD。
-// INVARIANT: 不移动工作树、本地 branch 或其他 remote-tracking ref。
+// L4 IN: fetch 接收同一 upstream 的 remote/ref；fastForward 接收 Git 返回的完整精确 SHA。
+// OUT: fetch 只移动单个 remote-tracking ref；fastForward 只对目标工作树执行 ff-only。
+// INVARIANT: 全部命令非交互并屏蔽 hooks；不改 Git 配置，不 reset/force/stash/checkout。
 // FAIL: 非交互失败抛 GitCommandError；caller 决定恢复语义。
-// TEST: repo://PaguguTests/GitEligibilityTests.swift（单分支与工作树零改动）。
+// TEST: repo://PaguguTests/GitEligibilityTests.swift（单分支 fetch、精确 SHA ff、hook 屏蔽）。
 protocol GitExecuting: Sendable {
     func fetch(remote: String, upstreamRef: String, at checkoutPath: String) async throws
+    func fastForward(to targetSHA: String, at checkoutPath: String) async throws
 }
 
 struct GitCommandOutput: Equatable, Sendable {
@@ -161,6 +162,20 @@ struct GitClient: GitInspecting, GitExecuting, Sendable {
         _ = try await Task.detached {
             try GitClient.runGit(
                 ["fetch", "--no-tags", "--", remote, refspec],
+                at: checkoutPath,
+                timeoutSeconds: timeoutSeconds
+            )
+        }.value
+    }
+
+    // L5 PARAM: targetSHA 只接受 40/64 位十六进制完整对象名，拒绝 ref 与类选项输入。
+    func fastForward(to targetSHA: String, at checkoutPath: String) async throws {
+        guard [40, 64].contains(targetSHA.count), targetSHA.allSatisfy(\.isHexDigit) else {
+            throw GitCommandError.commandFailed(exitCode: -1, stderr: "目标 SHA 不是完整 Git 对象名")
+        }
+        _ = try await Task.detached {
+            try GitClient.runGit(
+                ["merge", "--ff-only", "--", targetSHA],
                 at: checkoutPath,
                 timeoutSeconds: timeoutSeconds
             )

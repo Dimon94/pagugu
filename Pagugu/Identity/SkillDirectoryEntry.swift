@@ -2,7 +2,7 @@ import Foundation
 
 // L3 COORD: Pagugu/Identity/SkillDirectoryEntry.swift
 // POS: Identity 模块（纯函数，ADR-0009 §2）。owns Skill 目录条目、来源/检出分组、
-//      复制投影呈现组与逐 Installation 来源映射投影的值类型（ADR-0001 §3-4）。
+//      逐检出 Skill 成员清单、复制投影呈现组与逐 Installation 来源映射投影值类型。
 //      映射不拥有 Skill Source、Checkout 或 Git 状态事实。
 // TEST: repo://PaguguTests/IdentityTests.swift（分组、指纹与映射投影表测试）。
 
@@ -69,6 +69,12 @@ struct SkillSourceCheckout: Identifiable, Hashable, Sendable {
     var id: String { canonicalPath }
 }
 
+/// 目标物理检出内实际发现的 Skill Identity 清单；更新爆炸半径只读本清单。
+struct CheckoutSkillInventory: Hashable, Sendable {
+    let checkoutCanonicalPath: String
+    let skillIdentities: [SkillIdentity]
+}
+
 /// 来源仓库行（Variant F 呈现分组）：一个 Skill Source 及其全部子 Skill。
 struct SkillSourceItem: Identifiable, Hashable, Sendable {
     let id: SkillSourceKey
@@ -76,6 +82,30 @@ struct SkillSourceItem: Identifiable, Hashable, Sendable {
     let skills: [SkillDirectoryEntry]
     /// 同一 Skill Source Key 下全部已发现物理检出。不得聚合成单一假状态。
     let checkouts: [SkillSourceCheckout]
+    /// 每个物理检出的真实 Skill 成员；不同 clone/worktree 不互相污染更新影响名单。
+    let checkoutSkillInventories: [CheckoutSkillInventory]
+
+    init(
+        id: SkillSourceKey,
+        displayName: String,
+        skills: [SkillDirectoryEntry],
+        checkouts: [SkillSourceCheckout],
+        checkoutSkillInventories: [CheckoutSkillInventory] = []
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.skills = skills
+        self.checkouts = checkouts
+        self.checkoutSkillInventories = checkoutSkillInventories
+    }
+
+    func skills(atCheckoutCanonicalPath checkoutPath: String) -> [SkillDirectoryEntry] {
+        guard let inventory = checkoutSkillInventories.first(where: {
+            $0.checkoutCanonicalPath == checkoutPath
+        }) else { return [] }
+        let identities = Set(inventory.skillIdentities)
+        return skills.filter { identities.contains($0.id) }
+    }
 
     /// 仓库行的宿主并集（全部子 Skill 的安装事实）。
     var hosts: Set<AgentHost> {

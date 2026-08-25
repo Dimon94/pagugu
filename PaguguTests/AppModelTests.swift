@@ -605,6 +605,86 @@ final class AppModelTests: XCTestCase {
     }
 
     @MainActor
+    func testTwoEligibleCheckoutsAreReturnedAsTransientSortedChoices() async throws {
+        let repoA = tmp.appendingPathComponent("eligible-a")
+        let repoB = tmp.appendingPathComponent("eligible-b")
+        try makeWorkTree(at: repoA)
+        try makeWorkTree(at: repoB)
+        try writeSkill(at: repoA.appendingPathComponent("skills/helper"), name: "helper")
+        try writeSkill(at: repoA.appendingPathComponent("skills/only-a"), name: "only-a")
+        try writeSkill(at: repoB.appendingPathComponent("skills/helper"), name: "helper")
+        let remoteURL = "https://example.com/team/eligible.git"
+        let sourceKey = SkillSourceKey.remoteURL("example.com/team/eligible")
+        let tip = String(repeating: "e", count: 40)
+        let factsByPath = Dictionary(uniqueKeysWithValues: [repoB, repoA].map { repo in
+            (
+                repo.path,
+                updateFacts(
+                    path: repo.path,
+                    remoteURL: remoteURL,
+                    headSHA: String(repeating: repo == repoA ? "a" : "b", count: 40),
+                    remoteTipSHA: tip,
+                    relativePosition: .behindOnly(1)
+                )
+            )
+        })
+        let observations = try Dictionary(uniqueKeysWithValues: factsByPath.map { path, facts in
+            (
+                path,
+                CheckoutObservation(
+                    result: .success,
+                    completedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                    remoteTipSHA: tip,
+                    identityDigest: try XCTUnwrap(CheckoutEligibility.identityDigest(
+                        facts: facts,
+                        sourceKey: sourceKey
+                    ))
+                )
+            )
+        })
+        let dataDirectory = tmp.appendingPathComponent("eligible-data")
+        let persistence = Persistence(directoryURL: dataDirectory)
+        _ = await persistence.loadRegistry()
+        try await persistence.saveRegistry(RegistryDocument(
+            schemaVersion: RegistryDocument.currentSchemaVersion,
+            projectScanRoots: [],
+            sourceMappings: [:],
+            checkoutObservations: observations
+        ))
+        let model = AppModel(
+            personalRoots: [repoB.path, repoA.path],
+            persistence: Persistence(directoryURL: dataDirectory),
+            gitInspector: FakeGitInspector(factsByPath: factsByPath)
+        )
+        await model.start()
+        let source = try XCTUnwrap(model.readModel.sources.first)
+        let identity = try XCTUnwrap(source.skills.first { $0.displayName == "helper" }?.id)
+
+        XCTAssertEqual(model.eligibleUpdateCheckoutPaths(for: identity), [repoA.path, repoB.path])
+        XCTAssertEqual(
+            source.skills(atCheckoutCanonicalPath: repoA.path).map(\.displayName),
+            ["helper", "only-a"]
+        )
+        XCTAssertEqual(
+            source.skills(atCheckoutCanonicalPath: repoB.path).map(\.displayName),
+            ["helper"],
+            "确认影响名单必须按所选物理检出生成，不能使用其他 clone 的 Skill 并集"
+        )
+
+        let relaunched = AppModel(
+            personalRoots: [repoB.path, repoA.path],
+            persistence: Persistence(directoryURL: dataDirectory),
+            gitInspector: FakeGitInspector(factsByPath: factsByPath)
+        )
+        await relaunched.start()
+        XCTAssertEqual(
+            relaunched.eligibleUpdateCheckoutPaths(for: identity),
+            [repoA.path, repoB.path],
+            "检出选择只来自当次实时投影，不保存默认目标"
+        )
+    }
+
+    @MainActor
     func testRestartHidesStaleSuccessfulObservationWithoutDeletingItAndRevivesWhenFactsReturn() async throws {
         let repo = tmp.appendingPathComponent("repo")
         try makeWorkTree(at: repo)
@@ -811,6 +891,272 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(relaunchedCard.observation?.remoteTipSHA, "remote-tip")
     }
 
+    @MainActor
+    func testUpdateIntentsExposeTransientCheckoutChoiceConfirmExactPlanAndRefreshToUpToDate() async throws {
+        let repo = tmp.appendingPathComponent("update-repo")
+        try makeWorkTree(at: repo)
+        try writeSkill(at: repo.appendingPathComponent("skills/one"), name: "One")
+        try writeSkill(at: repo.appendingPathComponent("skills/two"), name: "Two")
+        let remoteURL = "https://example.com/team/update-skills.git"
+        let sourceKey = SkillSourceKey.remoteURL("example.com/team/update-skills")
+        let oldHead = String(repeating: "a", count: 40)
+        let target = String(repeating: "b", count: 40)
+        let localFacts = updateFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            headSHA: oldHead,
+            remoteTipSHA: target,
+            relativePosition: .unknown
+        )
+        let checkedFacts = updateFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            headSHA: oldHead,
+            remoteTipSHA: target,
+            relativePosition: .behindOnly(1)
+        )
+        let updatedLocalFacts = updateFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            headSHA: target,
+            remoteTipSHA: target,
+            relativePosition: .unknown
+        )
+        let updatedFacts = updateFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            headSHA: target,
+            remoteTipSHA: target,
+            relativePosition: .upToDate
+        )
+        let dataDirectory = tmp.appendingPathComponent("update-data")
+        let persistence = Persistence(directoryURL: dataDirectory)
+        _ = await persistence.loadRegistry()
+        let digest = try XCTUnwrap(CheckoutEligibility.identityDigest(facts: localFacts, sourceKey: sourceKey))
+        try await persistence.saveRegistry(RegistryDocument(
+            schemaVersion: RegistryDocument.currentSchemaVersion,
+            projectScanRoots: [],
+            sourceMappings: [:],
+            checkoutObservations: [
+                repo.path: CheckoutObservation(
+                    result: .success,
+                    completedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                    remoteTipSHA: target,
+                    identityDigest: digest
+                ),
+            ]
+        ))
+        let git = FakeUpdateGitClient(
+            localFacts: localFacts,
+            checkedFacts: checkedFacts,
+            updatedLocalFacts: updatedLocalFacts,
+            updatedFacts: updatedFacts
+        )
+        let model = AppModel(
+            personalRoots: [repo.path],
+            persistence: Persistence(directoryURL: dataDirectory),
+            gitInspector: git,
+            gitExecutor: git
+        )
+        await model.start()
+        let source = try XCTUnwrap(model.readModel.sources.first)
+        let selected = try XCTUnwrap(source.skills.first { $0.displayName == "One" }?.id)
+        XCTAssertEqual(model.eligibleUpdateCheckoutPaths(for: selected), [repo.path])
+
+        try await model.prepareUpdate(skillIdentity: selected, checkoutPath: repo.path)
+
+        let plan = try XCTUnwrap(model.pendingUpdatePlan)
+        XCTAssertEqual(plan.targetSHA, target)
+        XCTAssertEqual(plan.affectedSkills.map(\.displayName), ["One", "Two"])
+        XCTAssertNil(model.updateResult)
+
+        try await model.confirmUpdate()
+
+        XCTAssertNil(model.pendingUpdatePlan)
+        XCTAssertEqual(model.updateResult, .success(checkoutPath: repo.path, targetSHA: target))
+        XCTAssertNil(model.updateRefreshFailure)
+        let refreshedCard = try XCTUnwrap(model.readModel.checkoutCards(for: source.id).first)
+        XCTAssertEqual(refreshedCard.state, .upToDate)
+        let fastForwardCount = await git.fastForwardCount
+        let postUpdateRefreshCount = await git.localInspectionsAfterFastForward
+        XCTAssertEqual(fastForwardCount, 1)
+        XCTAssertGreaterThanOrEqual(postUpdateRefreshCount, 1, "成功后必须触发完整 Discovery 刷新")
+        let audit = await Persistence(directoryURL: dataDirectory).loadAuditEvidence()
+        XCTAssertEqual(audit.records.map(\.updateRunID), [plan.runID, plan.runID])
+    }
+
+    @MainActor
+    func testSuccessfulUpdateUsesPostVerifyFactsWhenPrepareFetchMovesPastStoredObservation() async throws {
+        let repo = tmp.appendingPathComponent("advanced-tip-repo")
+        try makeWorkTree(at: repo)
+        try writeSkill(at: repo.appendingPathComponent("skills/one"), name: "One")
+        let remoteURL = "https://example.com/team/advanced-tip.git"
+        let sourceKey = SkillSourceKey.remoteURL("example.com/team/advanced-tip")
+        let oldHead = String(repeating: "1", count: 40)
+        let observedTip = String(repeating: "2", count: 40)
+        let target = String(repeating: "3", count: 40)
+        let localFacts = updateFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            headSHA: oldHead,
+            remoteTipSHA: observedTip,
+            relativePosition: .unknown
+        )
+        let checkedFacts = updateFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            headSHA: oldHead,
+            remoteTipSHA: observedTip,
+            relativePosition: .behindOnly(1)
+        )
+        let preparedFacts = updateFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            headSHA: oldHead,
+            remoteTipSHA: target,
+            relativePosition: .behindOnly(2)
+        )
+        let updatedLocalFacts = updateFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            headSHA: target,
+            remoteTipSHA: target,
+            relativePosition: .unknown
+        )
+        let updatedFacts = updateFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            headSHA: target,
+            remoteTipSHA: target,
+            relativePosition: .upToDate
+        )
+        let dataDirectory = tmp.appendingPathComponent("advanced-tip-data")
+        let persistence = Persistence(directoryURL: dataDirectory)
+        _ = await persistence.loadRegistry()
+        let digest = try XCTUnwrap(CheckoutEligibility.identityDigest(facts: localFacts, sourceKey: sourceKey))
+        try await persistence.saveRegistry(RegistryDocument(
+            schemaVersion: RegistryDocument.currentSchemaVersion,
+            projectScanRoots: [],
+            sourceMappings: [:],
+            checkoutObservations: [
+                repo.path: CheckoutObservation(
+                    result: .success,
+                    completedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                    remoteTipSHA: observedTip,
+                    identityDigest: digest
+                ),
+            ]
+        ))
+        let git = FakeUpdateGitClient(
+            localFacts: localFacts,
+            checkedFacts: checkedFacts,
+            preparedFacts: preparedFacts,
+            updatedLocalFacts: updatedLocalFacts,
+            updatedFacts: updatedFacts
+        )
+        let model = AppModel(
+            personalRoots: [repo.path],
+            persistence: Persistence(directoryURL: dataDirectory),
+            gitInspector: git,
+            gitExecutor: git
+        )
+        await model.start()
+        let source = try XCTUnwrap(model.readModel.sources.first)
+        let selected = try XCTUnwrap(source.skills.first?.id)
+
+        try await model.prepareUpdate(skillIdentity: selected, checkoutPath: repo.path)
+        XCTAssertEqual(model.pendingUpdatePlan?.targetSHA, target)
+        XCTAssertEqual(model.pendingUpdatePlan?.behindCount, 2)
+        try await model.confirmUpdate()
+
+        let refreshedCard = try XCTUnwrap(model.readModel.checkoutCards(for: source.id).first)
+        XCTAssertEqual(refreshedCard.state, .upToDate)
+        XCTAssertNil(refreshedCard.observation, "旧观察保持不改写；本次刷新只消费 Update post-verify 一次性事实")
+        guard case .ready(let retained) = await Persistence(directoryURL: dataDirectory).loadRegistry() else {
+            return XCTFail("Registry 应保持可读")
+        }
+        XCTAssertEqual(retained.checkoutObservations[repo.path]?.remoteTipSHA, observedTip)
+    }
+
+    @MainActor
+    func testSuccessfulUpdateKeepsSuccessWhenFullRefreshFailsAndDoesNotRollback() async throws {
+        let repo = tmp.appendingPathComponent("refresh-failure-repo")
+        try makeWorkTree(at: repo)
+        try writeSkill(at: repo.appendingPathComponent("skills/one"), name: "One")
+        let remoteURL = "https://example.com/team/refresh-failure.git"
+        let sourceKey = SkillSourceKey.remoteURL("example.com/team/refresh-failure")
+        let oldHead = String(repeating: "c", count: 40)
+        let target = String(repeating: "d", count: 40)
+        let localFacts = updateFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            headSHA: oldHead,
+            remoteTipSHA: target,
+            relativePosition: .unknown
+        )
+        let checkedFacts = updateFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            headSHA: oldHead,
+            remoteTipSHA: target,
+            relativePosition: .behindOnly(1)
+        )
+        let updatedLocalFacts = updateFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            headSHA: target,
+            remoteTipSHA: target,
+            relativePosition: .unknown
+        )
+        let updatedFacts = updateFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            headSHA: target,
+            remoteTipSHA: target,
+            relativePosition: .upToDate
+        )
+        let dataDirectory = tmp.appendingPathComponent("refresh-failure-data")
+        let persistence = Persistence(directoryURL: dataDirectory)
+        _ = await persistence.loadRegistry()
+        let digest = try XCTUnwrap(CheckoutEligibility.identityDigest(facts: localFacts, sourceKey: sourceKey))
+        try await persistence.saveRegistry(RegistryDocument(
+            schemaVersion: RegistryDocument.currentSchemaVersion,
+            projectScanRoots: [ProjectScanRootRecord(canonicalPath: repo.path, asFoundPath: repo.path)],
+            sourceMappings: [:],
+            checkoutObservations: [
+                repo.path: CheckoutObservation(
+                    result: .success,
+                    completedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                    remoteTipSHA: target,
+                    identityDigest: digest
+                ),
+            ]
+        ))
+        let git = FakeUpdateGitClient(
+            localFacts: localFacts,
+            checkedFacts: checkedFacts,
+            updatedLocalFacts: updatedLocalFacts,
+            updatedFacts: updatedFacts,
+            removePathOnFastForward: repo
+        )
+        let model = AppModel(
+            personalRoots: [],
+            persistence: Persistence(directoryURL: dataDirectory),
+            gitInspector: git,
+            gitExecutor: git
+        )
+        await model.start()
+        let selected = try XCTUnwrap(model.readModel.sources.first?.skills.first?.id)
+        try await model.prepareUpdate(skillIdentity: selected, checkoutPath: repo.path)
+        try await model.confirmUpdate()
+
+        XCTAssertEqual(model.updateResult, .success(checkoutPath: repo.path, targetSHA: target))
+        XCTAssertEqual(model.updateRefreshFailure?.outcome, .failed)
+        XCTAssertFalse(fm.fileExists(atPath: repo.path), "测试必须真实制造完整扫描刷新失败")
+        let fastForwardCount = await git.fastForwardCount
+        XCTAssertEqual(fastForwardCount, 1, "刷新失败不得触发任何回滚或第二次 Git 写入")
+    }
+
     private func checkoutFacts(
         path: String,
         remoteURL: String,
@@ -922,6 +1268,81 @@ final class AppModelTests: XCTestCase {
         }
     }
 
+    private func updateFacts(
+        path: String,
+        remoteURL: String,
+        headSHA: String,
+        remoteTipSHA: String,
+        relativePosition: GitRelativePosition
+    ) -> CheckoutGitFacts {
+        CheckoutGitFacts(
+            checkoutPath: path,
+            gitCommonDirectory: path + "/.git",
+            head: .branch(name: "main", sha: headSHA),
+            originRemoteURL: remoteURL,
+            upstream: GitUpstream(
+                ref: "origin/main",
+                remoteName: "origin",
+                remoteURL: remoteURL,
+                sha: remoteTipSHA
+            ),
+            dirty: .clean,
+            relativePosition: relativePosition,
+            worktrees: [GitWorktree(path: path, branch: "main")],
+            siblingBranchConflict: false,
+            inspectionFailure: nil
+        )
+    }
+
+    private actor FakeUpdateGitClient: GitInspecting, GitExecuting {
+        let localFacts: CheckoutGitFacts
+        let checkedFacts: CheckoutGitFacts
+        let preparedFacts: CheckoutGitFacts
+        let updatedLocalFacts: CheckoutGitFacts
+        let updatedFacts: CheckoutGitFacts
+        private(set) var fetchCount = 0
+        private(set) var fastForwardCount = 0
+        private(set) var localInspectionsAfterFastForward = 0
+        let removePathOnFastForward: URL?
+
+        init(
+            localFacts: CheckoutGitFacts,
+            checkedFacts: CheckoutGitFacts,
+            preparedFacts: CheckoutGitFacts? = nil,
+            updatedLocalFacts: CheckoutGitFacts,
+            updatedFacts: CheckoutGitFacts,
+            removePathOnFastForward: URL? = nil
+        ) {
+            self.localFacts = localFacts
+            self.checkedFacts = checkedFacts
+            self.preparedFacts = preparedFacts ?? checkedFacts
+            self.updatedLocalFacts = updatedLocalFacts
+            self.updatedFacts = updatedFacts
+            self.removePathOnFastForward = removePathOnFastForward
+        }
+
+        func fetch(remote: String, upstreamRef: String, at checkoutPath: String) async throws {
+            fetchCount += 1
+        }
+
+        func fastForward(to targetSHA: String, at checkoutPath: String) async throws {
+            XCTAssertEqual(targetSHA, updatedFacts.head?.sha)
+            fastForwardCount += 1
+            if let removePathOnFastForward {
+                try FileManager.default.removeItem(at: removePathOnFastForward)
+            }
+        }
+
+        func inspectCheckout(at checkoutPath: String, scope: GitInspectionScope) async -> CheckoutGitFacts {
+            guard fastForwardCount > 0 else {
+                if scope == .localOnly { return localFacts }
+                return fetchCount == 0 ? checkedFacts : preparedFacts
+            }
+            if scope == .localOnly { localInspectionsAfterFastForward += 1 }
+            return scope == .localOnly ? updatedLocalFacts : updatedFacts
+        }
+    }
+
     private actor FakeCheckGitClient: GitInspecting, GitExecuting {
         let initial: CheckoutGitFacts
         let checked: CheckoutGitFacts
@@ -934,6 +1355,10 @@ final class AppModelTests: XCTestCase {
 
         func fetch(remote: String, upstreamRef: String, at checkoutPath: String) async throws {
             fetchCount += 1
+        }
+
+        func fastForward(to targetSHA: String, at checkoutPath: String) async throws {
+            XCTFail("Check Run fake 不应执行 fast-forward")
         }
 
         func inspectCheckout(at checkoutPath: String, scope: GitInspectionScope) async -> CheckoutGitFacts {

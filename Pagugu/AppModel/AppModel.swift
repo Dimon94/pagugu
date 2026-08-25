@@ -2,12 +2,28 @@ import Foundation
 
 // L3 COORD: Pagugu/AppModel/AppModel.swift
 // POS: AppModel 模块（ADR-0009 §7）。@MainActor composition root：
-//      owns Skill Read Model、受限恢复与来源映射错误投影、目录收起与 Check Run 瞬态、全部 UI intent
+//      owns Skill Read Model、受限恢复与来源映射错误投影、目录收起、Check/Update 瞬态、全部 UI intent
 //      与启动/刷新编排；每次发布按实时事实重推导观察 freshness。does not own 直接 Git/文件系统/持久 IO
 //      （经 Git/Discovery/Registry/Audit/Runs seam）、
 //      业务规则重建。
 // TEST: repo://PaguguTests/AppModelTests.swift（Registry gate、Project Scan Root intent、
 //      目录投影与 intent 路由 smoke）。
+
+enum UpdateResult: Equatable, Sendable {
+    case success(checkoutPath: String, targetSHA: String)
+    case upToDate
+    case blocked(CheckoutGitState)
+}
+
+struct UpdateRefreshFailure: Equatable, Sendable {
+    enum Outcome: Equatable, Sendable {
+        case partial
+        case failed
+    }
+
+    let outcome: Outcome
+    let issueCount: Int
+}
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -21,6 +37,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var checkRunProgress: CheckRunProgress?
     @Published private(set) var checkRunSummary: CheckRunSummary?
     @Published private(set) var sourceMappingError: SourceMappingError?
+    @Published private(set) var pendingUpdatePlan: UpdatePlan?
+    @Published private(set) var updateResult: UpdateResult?
+    @Published private(set) var updateRefreshFailure: UpdateRefreshFailure?
 
     /// 收起的来源仓库行集合（默认全部展开）。瞬态 UI 状态，不持久化。
     @Published private(set) var collapsedSources: Set<SkillSourceKey> = []
@@ -63,10 +82,11 @@ final class AppModel: ObservableObject {
             registryReady = false
             readModel = .empty()
             checkScope = []
+            pendingUpdatePlan = nil
         }
     }
 
-    private func publishDiscovery() async {
+    private func publishDiscovery(successfulUpdateFacts: CheckoutGitFacts? = nil) async {
         let projectScanRoots = await registry.projectScanRoots()
         let scanResult = Discovery.scanAll(
             personalRoots: personalRoots,
@@ -86,6 +106,24 @@ final class AppModel: ObservableObject {
             gitFactsByCheckoutPath: factsByCheckoutPath,
             mappings: mappings
         )
+        if let successfulUpdateFacts,
+           let source = contents.sources.first(where: { source in
+               source.checkouts.contains { $0.canonicalPath == successfulUpdateFacts.checkoutPath }
+           }),
+           let currentFacts = factsByCheckoutPath[successfulUpdateFacts.checkoutPath],
+           let successfulIdentity = CheckoutEligibility.identityDigest(
+               facts: successfulUpdateFacts,
+               sourceKey: source.id
+           ),
+           CheckoutEligibility.identityDigest(facts: currentFacts, sourceKey: source.id) == successfulIdentity,
+           currentFacts.head == successfulUpdateFacts.head,
+           currentFacts.upstream?.sha == successfulUpdateFacts.upstream?.sha,
+           currentFacts.dirty == successfulUpdateFacts.dirty,
+           currentFacts.siblingBranchConflict == successfulUpdateFacts.siblingBranchConflict,
+           currentFacts.inspectionFailure == nil {
+            // Update Run 的 post-verify 是本次刷新的一次性事实证据；不写 Observation，也不跨刷新保留。
+            factsByCheckoutPath[successfulUpdateFacts.checkoutPath] = successfulUpdateFacts
+        }
         let observations = await registry.checkoutObservations()
         for source in contents.sources {
             for checkout in source.checkouts {
@@ -219,6 +257,107 @@ final class AppModel: ObservableObject {
 
     func dismissCheckRunSummary() {
         checkRunSummary = nil
+    }
+
+    /// 同一 Skill Source 下当前 Eligible 检出候选。每次从 Read Model 计算，不持久化选择。
+    func eligibleUpdateCheckoutPaths(for skillIdentity: SkillIdentity) -> [String] {
+        guard case .complete = readModel.scanOutcome,
+              let source = readModel.sourceItem(for: skillIdentity.sourceKey),
+              source.skills.contains(where: { $0.id == skillIdentity }) else { return [] }
+        return readModel.checkoutCards(for: source.id)
+            .filter { $0.state == .updateAvailable }
+            .map(\.id)
+            .sorted()
+    }
+
+    // L4 IN: Skill Identity 与 checkoutPath 必须来自当前完整 Read Model 的 Eligible 候选。
+    // OUT: 发布 pendingUpdatePlan，或 noop/既有阻断态结果；选择不持久化。
+    // FAIL: stale intent 与 Runs/Git typed error 原样抛给 caller，且不保留计划。
+    // TEST: repo://PaguguTests/AppModelTests.swift（候选、计划事实、noop/刷新链路）。
+    func prepareUpdate(skillIdentity: SkillIdentity, checkoutPath: String) async throws {
+        guard eligibleUpdateCheckoutPaths(for: skillIdentity).contains(checkoutPath),
+              let source = readModel.sourceItem(for: skillIdentity.sourceKey),
+              let card = readModel.checkoutCards(for: source.id).first(where: { $0.id == checkoutPath }) else {
+            throw UpdateRunContractError.invalidRequest
+        }
+        let affectedEntries = source.skills(atCheckoutCanonicalPath: checkoutPath)
+        guard affectedEntries.contains(where: { $0.id == skillIdentity }) else {
+            throw UpdateRunContractError.invalidRequest
+        }
+        pendingUpdatePlan = nil
+        updateResult = nil
+        updateRefreshFailure = nil
+        let runner = UpdateRunner(
+            gitInspector: gitInspector,
+            gitExecutor: gitExecutor,
+            audit: audit
+        )
+        do {
+            let preparation = try await runner.prepareUpdate(request: UpdateRunRequest(
+                skillIdentity: skillIdentity,
+                target: CheckRunTarget(sourceKey: source.id, facts: card.facts),
+                affectedSkills: affectedEntries.map {
+                    UpdateAffectedSkill(identity: $0.id, displayName: $0.displayName)
+                }
+            ))
+            switch preparation {
+            case .ready(let plan):
+                pendingUpdatePlan = plan
+            case .upToDate:
+                updateResult = .upToDate
+            case .blocked(let state):
+                updateResult = .blocked(state)
+            }
+        } catch {
+            pendingUpdatePlan = nil
+            throw error
+        }
+    }
+
+    // L4 IN: pendingUpdatePlan 必须仍是用户当前确认的冻结计划。
+    // OUT: 成功结果先发布，再以 post-verify 一次性事实执行完整 Discovery 刷新；刷新失败独立投影。
+    // FAIL: typed error 原样抛给 caller并清空计划；不重试、不回滚。
+    // TEST: repo://PaguguTests/AppModelTests.swift（成功、旧 Observation、刷新失败隔离）。
+    func confirmUpdate() async throws {
+        guard let plan = pendingUpdatePlan else {
+            throw UpdateRunContractError.invalidRequest
+        }
+        let runner = UpdateRunner(
+            gitInspector: gitInspector,
+            gitExecutor: gitExecutor,
+            audit: audit
+        )
+        do {
+            let success = try await runner.executeConfirmed(plan)
+            pendingUpdatePlan = nil
+            updateResult = .success(
+                checkoutPath: success.plan.checkoutCanonicalPath,
+                targetSHA: success.plan.targetSHA
+            )
+            await publishDiscovery(successfulUpdateFacts: success.postVerificationFacts)
+            switch readModel.scanOutcome {
+            case .complete:
+                updateRefreshFailure = nil
+            case .partial:
+                updateRefreshFailure = UpdateRefreshFailure(
+                    outcome: .partial,
+                    issueCount: readModel.issues.count
+                )
+            case .failed:
+                updateRefreshFailure = UpdateRefreshFailure(
+                    outcome: .failed,
+                    issueCount: readModel.issues.count
+                )
+            }
+        } catch {
+            pendingUpdatePlan = nil
+            throw error
+        }
+    }
+
+    func dismissUpdateResult() {
+        updateResult = nil
+        updateRefreshFailure = nil
     }
 
     func addProjectScanRoot(_ url: URL) async {

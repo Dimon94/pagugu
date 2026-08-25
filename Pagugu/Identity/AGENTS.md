@@ -5,7 +5,7 @@
 成员清单:
 - `SkillIdentity.swift`：`SkillSourceKey`、`SkillIdentity`、`SourceMappingEvaluator`。
 - `AgentHost.swift`：`AgentHost`（claude/codex）、`HostAttribution` 归因表。
-- `SkillDirectoryEntry.swift`：`ProjectionType`、`SkillInstallation`（含逐安装 canonicalPath）、`SkillDirectoryEntry`、`SkillSourceCheckout`、`SkillSourceItem`、`UnattributedInstallationItem`、`SkillDirectoryContents`。
+- `SkillDirectoryEntry.swift`：`ProjectionType`、`SkillInstallation`（含逐安装 canonicalPath）、`SkillDirectoryEntry`、`SkillSourceCheckout`、`CheckoutSkillInventory`、`SkillSourceItem`、`UnattributedInstallationItem`、`SkillDirectoryContents`；每个物理检出的 Skill 成员清单单独保留。
 - `SkillDirectory.swift`：`SkillDirectory.contents(from:gitFactsByCheckoutPath:mappings:)` 分组与映射投影入口；有效 origin 升级为规范化 remote key，否则保留 canonical path key。
 
 反模式: 不读文件系统、不调用 Git；frontmatter `name` 与安装目录名不参与身份；复制投影不做启发式自动归因；人工映射键只能是具体 Installation canonical path，不能是名称、内容指纹或呈现组；失效记录不静默删除，部分扫描不判失效；复制投影只按内容指纹聚合呈现组——禁止只按名称合并，指纹缺失（读取不完整）不合并，零安装的纯来源发现永不合并（ADR-0001 §4，#16 修正；安装产生规则归 #18：Personal Root 入口或带宿主归因才产生 Installation）。
