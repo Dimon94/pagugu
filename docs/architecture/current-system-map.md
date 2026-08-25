@@ -1,13 +1,13 @@
 # Current System Map
 
-Status: runnable discovery、实时 Git Fact / 12 态裁决与 Project Scan Root management
+Status: runnable discovery、实时 Git Fact / 12 态裁决、目录状态投影与 Project Scan Root management
 
 本文件描述当前可验证的系统边界。产品动机、目标用户与目标体验见 repo://docs/product/vision.md。规划中的 Skill 扫描和更新能力不冒充现状。
 
 ## 当前事实
 
 - 产品：Pagugu，本地 macOS Agent Skill 管理与安全同步应用。
-- 当前阶段：可运行发现目录、逐检出实时 Git Fact、12 态 Checkout Git State 裁决、逐检出详情卡片与 Project Scan Root 管理。
+- 当前阶段：可运行发现目录、逐检出实时 Git Fact、12 态 Checkout Git State 裁决、逐检出详情卡片、目录逐态短语/五档静默排序与 Project Scan Root 管理。
 - 技术栈：原生 Xcode macOS App、SwiftUI、Swift 6、macOS 14+。
 - 运行入口：`Pagugu/App/PaguguApp.swift`；稳定本地入口为 `script/build_and_run.sh`。
 - 分发：本地构建；App Sandbox 关闭。签名、公证和 GitHub Releases 尚未实现。
@@ -27,7 +27,7 @@ Status: runnable discovery、实时 Git Fact / 12 态裁决与 Project Scan Root
       -> Git 逐候选检出实时只读 inspection（无 Check Run，远端相对位置 Unknown）
       -> Identity 以 Git origin 规范化 Source Key，聚合 Skill 且保留全部物理检出
       -> Eligibility 按固定 precedence 裁决逐检出主状态
-      -> AppModel 发布 Skill Read Model
+      -> AppModel 发布 Skill Read Model（逐态目录短语；需要处理 → 可更新 → 尚未检查 → 无需更新 → 仅本地）
       -> WindowGroup + MenuBarExtra
       -> ContentView / MenuBarView
 
@@ -36,7 +36,7 @@ Status: runnable discovery、实时 Git Fact / 12 态裁决与 Project Scan Root
 | Module | Owns | Does not own | Public interface | Depends on | Verification |
 | --- | --- | --- | --- | --- | --- |
 | PaguguApp | 应用生命周期、主窗口与状态栏场景 | Skill 扫描、Git 状态、持久化 | macOS App 入口 | SwiftUI、AppKit | `script/build_and_run.sh --verify` |
-| ContentView | 主窗口 Variant F IA；Skill 详情四块含逐检出「状态与检出」卡片；扫描范围管理与 Registry 故障阻断 | Skill Read Model 派生、Checkout Git State 裁决、IO | SwiftUI `View` | SwiftUI、AppModel | App build |
+| ContentView | 主窗口 Variant F IA；显示目录状态短语与 Skill 详情四块含逐检出「状态与检出」卡片；扫描范围管理与 Registry 故障阻断 | Skill Read Model 派生、Checkout Git State 裁决、IO | SwiftUI `View` | SwiftUI、AppModel | App build |
 | MenuBarView | 打开主窗口与退出动作 | 更新状态和后台调度 | SwiftUI `View` | SwiftUI、AppKit | App build + launch |
 | AppIdentity | 产品展示名、Bundle ID、主窗口 ID | 用户配置 | 静态常量 | Swift 标准库 | `PaguguTests.testProductIdentity` |
 | Discovery | Discovery Scan：遍历全部 Scan Root、发现入口标注、软链接解析、Canonical Path 去重防环、SKILL.md 解析校验与原文读取、Git 工作树根检测（`.git` 存在性）、复制投影内容指纹（SHA-256，fail closed）、Scan Issue | 身份归因与指纹聚合（归 Identity）、Git 子进程 | `Discovery.scanAll(personalRoots:projectRoots:)`、`scanPersonalRoots(_:)`、`scanProjectRoot(_:)`、`skillMarkdown(atCanonicalPath:)`、`contentFingerprint(ofSkillAtCanonicalPath:)` | Foundation、CryptoKit | `PaguguTests/DiscoveryTests.swift` |
@@ -45,7 +45,7 @@ Status: runnable discovery、实时 Git Fact / 12 态裁决与 Project Scan Root
 | Eligibility | 12 态固定 precedence、稳定 reason code、中文名与恢复方向（纯函数） | Git 调用、持久化、UI | `CheckoutEligibility.evaluate(facts:sourceKey:)` | Git/Identity 值类型 | `PaguguTests/GitEligibilityTests.swift` |
 | Registry | Project Scan Root 串行 mutation、护栏、按序主张添加、显式删除与合法性/可用性派生 | registry.json 物理 IO、Discovery、UI、来源映射与观察槽的后续入口 | `AppRegistry.load()`、`addProjectScanRoot(_:)`、`removeProjectScanRoot(canonicalPath:)`、`projectScanRoots()` | Persistence、Foundation | `PaguguTests/RegistryTests.swift` |
 | Persistence | registry.json 的物理 IO、v1 持久记录类型、兼容分发、双 fsync 原子写、quarantine、外部修改检测 | 三类主张与审计记录的业务语义、Git/Discovery/Eligibility | `loadRegistry()`、`saveRegistry(_:)`、`resetRegistry(confirmed:)` | Foundation、Darwin | `PaguguTests/PersistenceTests.swift` |
-| AppModel | @MainActor composition root：启动/刷新串联 Registry、Discovery、Git、Identity、Eligibility并发布逐检出只读投影 | 直接 Git/文件系统/持久 IO、业务规则重建 | 既有 UI intents 与 `readModel` | Registry、Discovery、Git、Identity、Eligibility | `PaguguTests/AppModelTests.swift` |
+| AppModel | @MainActor composition root：启动/刷新串联 Registry、Discovery、Git、Identity、Eligibility并发布逐检出只读投影、目录逐态短语与五档静默排序 | 直接 Git/文件系统/持久 IO、Checkout Git State/更新资格重建 | 既有 UI intents 与 `readModel` | Registry、Discovery、Git、Identity、Eligibility | `PaguguTests/AppModelTests.swift` |
 | build_and_run.sh | kill、build、launch、进程验证 | 签名、公证、发布 | `run|--debug|--logs|--telemetry|--verify` | `xcodebuild`、macOS CLI | `--verify` |
 
 ## 产品不变量
@@ -67,7 +67,7 @@ Status: runnable discovery、实时 Git Fact / 12 态裁决与 Project Scan Root
 
 - `SKILL.md` frontmatter 的完整 Agent Skills 规范校验（name/description 字段违规标注）。
 - Check Run、Checkout Observation freshness、更新与审计（#21–#26 后续票）。因此 AppModel 当前只做 local-only inspection，有远程的检出也以 check-unknown 呈现，不冒充已检查。
-- Skill 详情「相关记录」「更新动作」两块与目录行状态短语、五档静默排序（#20 及后续票）。
+- Skill 详情「相关记录」「更新动作」两块（后续票）。
 - 来源映射维护与失效生命周期（#25 后续票）；当前无仓库可归行只呈现「来源不明」事实（内容完全一致的复制安装聚合为只读呈现组，ADR-0001 §4）。
 - 审计证据（Audit Evidence）持久集合。
 - Logo、签名、公证与发布。

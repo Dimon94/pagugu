@@ -3,9 +3,9 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 // L3 COORD: Pagugu/Views/ContentView.swift
-// POS: 主窗口内容（Variant F 主从结构，#16 落地目录 IA 与 Skill 详情三块）。
+// POS: 主窗口内容（Variant F 主从结构，#16 落地目录 IA，#20 落地目录状态短语与静默排序）。
 //      左侧：平铺目录——来源仓库行（可收起/展开子 Skill 行，默认展开，chevron 独立热区）
-//      + 无仓库可归行（来源不明）；无分组标题、无筛选 UI。
+//      + 无仓库可归行（来源不明）；消费 Skill Read Model 给出的逐态短语与五档顺序；无分组标题、无筛选 UI。
 //      右侧：Skill 详情四块（状态与检出、安装位置、来源标识、SKILL.md 原文只读可选中）；
 //      空选择回欢迎引导。「相关记录」「更新动作」块归后续票。
 //      工具栏管理 Project Scan Root；Registry 故障由全窗口门面接管。
@@ -317,6 +317,7 @@ private struct SkillDirectoryListView: View {
             if let source = readModel.sourceItem(for: key) {
                 SkillSourceRow(
                     source: source,
+                    statusPhrase: readModel.directoryStatusPhrase(for: key),
                     isCollapsed: collapsedSources.contains(key),
                     onToggle: { onToggleSource(key) }
                 )
@@ -337,6 +338,7 @@ private struct SkillDirectoryListView: View {
 
 private struct SkillSourceRow: View {
     let source: SkillSourceItem
+    let statusPhrase: String?
     let isCollapsed: Bool
     let onToggle: () -> Void
 
@@ -357,6 +359,12 @@ private struct SkillSourceRow: View {
                     .font(.headline)
                 Spacer()
                 HostLogoSlots(hosts: source.hosts)
+            }
+            if let statusPhrase {
+                Text(statusPhrase)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 24)
             }
             Text(source.id.displayString)
                 .font(.caption2)

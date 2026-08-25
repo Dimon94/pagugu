@@ -119,6 +119,116 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(collapsed, [.source(source.id)], "收起后只剩仓库行")
     }
 
+    func testDirectoryStatusPhraseTable() throws {
+        let cases: [(CheckoutGitState, String)] = [
+            (.inspectionFailed, "检查失败"),
+            (.noRemote, "仅本地"),
+            (.detached, "HEAD 已分离"),
+            (.noUpstream, "未配置上游"),
+            (.upstreamMismatch, "上游来源不一致"),
+            (.siblingConflict, "兄弟检出冲突"),
+            (.checkUnknown, "尚未检查"),
+            (.dirty, "有未提交改动"),
+            (.diverged, "本地与上游已分叉"),
+            (.aheadOnly, "本地领先"),
+            (.updateAvailable, "可更新"),
+            (.upToDate, "已是最新"),
+        ]
+
+        for (state, expected) in cases {
+            let readModel = makeDirectoryReadModel([(name: "source", states: [state])])
+            let source = try XCTUnwrap(readModel.sources.first)
+            XCTAssertEqual(readModel.directoryStatusPhrase(for: source.id), expected, state.rawValue)
+        }
+
+        let readModel = makeDirectoryReadModel([
+            (
+                name: "mixed",
+                states: [.noRemote, .upToDate, .checkUnknown, .updateAvailable, .dirty, .dirty]
+            ),
+        ])
+        let source = try XCTUnwrap(readModel.sources.first)
+        XCTAssertEqual(
+            readModel.directoryStatusPhrase(for: source.id),
+            "2 个有未提交改动 · 1 个可更新 · 1 个尚未检查 · 1 个已是最新 · 1 个仅本地"
+        )
+        XCTAssertEqual(readModel.checkoutCards(for: source.id).count, 6, "短语计数与详情卡片一一对应")
+    }
+
+    func testDirectoryNodesUseFiveQuietPrioritiesAndRefreshWithStates() {
+        let cases: [(
+            rows: [(name: String, states: [CheckoutGitState])],
+            expectedNames: [String]
+        )] = [
+            (
+                rows: [
+                    ("local", [.noRemote]),
+                    ("settled", [.upToDate]),
+                    ("unknown", [.checkUnknown]),
+                    ("update", [.updateAvailable]),
+                    ("dirty", [.dirty]),
+                ],
+                expectedNames: ["dirty", "update", "unknown", "settled", "local"]
+            ),
+            (
+                rows: [
+                    ("diverged", [.diverged]),
+                    ("detached", [.detached]),
+                    ("dirty", [.dirty]),
+                    ("inspection", [.inspectionFailed]),
+                    ("mismatch", [.upstreamMismatch]),
+                    ("no-upstream", [.noUpstream]),
+                    ("sibling", [.siblingConflict]),
+                ],
+                expectedNames: [
+                    "inspection", "detached", "no-upstream", "mismatch", "sibling", "dirty", "diverged",
+                ]
+            ),
+            (
+                rows: [
+                    ("mixed-attention", [.upToDate, .dirty]),
+                    ("mixed-update", [.noRemote, .updateAvailable]),
+                    ("ahead", [.aheadOnly]),
+                    ("current", [.upToDate]),
+                ],
+                expectedNames: ["mixed-attention", "mixed-update", "ahead", "current"]
+            ),
+            (
+                rows: [
+                    ("a", [.upToDate]),
+                    ("b", [.updateAvailable]),
+                ],
+                expectedNames: ["b", "a"]
+            ),
+            (
+                rows: [
+                    ("a", [.dirty]),
+                    ("b", [.updateAvailable]),
+                ],
+                expectedNames: ["a", "b"]
+            ),
+        ]
+
+        for testCase in cases {
+            let readModel = makeDirectoryReadModel(testCase.rows)
+            let names = directoryRootNames(in: readModel)
+            XCTAssertEqual(names, testCase.expectedNames)
+        }
+
+        let mixedRoots = makeDirectoryReadModel(
+            [
+                ("update", [.updateAvailable]),
+                ("dirty", [.dirty]),
+                ("missing-cards", []),
+            ],
+            unattributedNames: ["copy"]
+        )
+        XCTAssertEqual(
+            directoryRootNames(in: mixedRoots),
+            ["dirty", "missing-cards", "copy", "update"]
+        )
+    }
+
     // MARK: - UI Intents：收起/展开与 rescan 路由存在
 
     @MainActor
@@ -492,6 +602,64 @@ final class AppModelTests: XCTestCase {
             siblingBranchConflict: false,
             inspectionFailure: nil
         )
+    }
+
+    private func makeDirectoryReadModel(
+        _ rows: [(name: String, states: [CheckoutGitState])],
+        unattributedNames: [String] = []
+    ) -> SkillReadModel {
+        let sources = rows.map { row in
+            let key = SkillSourceKey.remoteURL("example.com/\(row.name)")
+            return SkillSourceItem(
+                id: key,
+                displayName: row.name,
+                skills: [],
+                checkouts: row.states.indices.map {
+                    SkillSourceCheckout(canonicalPath: "/\(row.name)/\($0)")
+                }
+            )
+        }
+        let cards = Dictionary(uniqueKeysWithValues: zip(sources, rows).map { source, row in
+            (
+                source.id,
+                row.states.enumerated().map { index, state in
+                    CheckoutCardReadModel(
+                        facts: checkoutFacts(
+                            path: "/\(row.name)/\(index)",
+                            remoteURL: "https://example.com/\(row.name).git"
+                        ),
+                        state: state
+                    )
+                }
+            )
+        })
+        return SkillReadModel(
+            sources: sources,
+            unattributedInstallations: unattributedNames.map {
+                UnattributedInstallationItem(
+                    id: $0,
+                    displayName: $0,
+                    canonicalPath: "/\($0)",
+                    installations: []
+                )
+            },
+            issues: [],
+            scanOutcome: .complete,
+            checkoutCardsBySource: cards
+        )
+    }
+
+    private func directoryRootNames(in readModel: SkillReadModel) -> [String] {
+        readModel.directoryNodes(collapsedSources: []).compactMap { node in
+            switch node {
+            case .source(let key):
+                return readModel.sourceItem(for: key)?.displayName
+            case .unattributedInstallation(let id):
+                return readModel.unattributedItem(for: id)?.displayName
+            case .skill:
+                return nil
+            }
+        }
     }
 
     private struct FakeGitInspector: GitInspecting {
