@@ -56,6 +56,7 @@ MVP 1.0 使用主窗口承载完整闭环。现有状态栏入口只负责打开
 - 自动扫描 `~/.claude/skills`、`~/.agents/skills` 与 `~/.codex/skills`。
 - 递归扫描用户明确选择并保存的 Project Scan Root，发现其中的项目级安装与源码仓库内的 Skill（后者可以没有安装）。
 - 同时覆盖自有 Skill 与第三方开源 Skill。
+- 同一个 Skill 安装到多个 Agent Host 时聚合为一个条目（聚合全部安装位置与宿主槽位）；内容完全一致的复制安装聚合为一个只读「来源不明」呈现组，不做来源推断。
 - 按 Agent Host、Skill Source 和 Skill Installation 展示关系，而不是只列目录名。
 - 识别真实 `SKILL.md`、frontmatter、软链接和 Git 来源。托管插件的首批范围仍为 Unknown。
 

@@ -11,6 +11,14 @@ enum SkillSourceKey: Hashable, Sendable {
     case remoteURL(String)
     case localPath(String)
 
+    /// 展示用字符串：规范化远程 URL 或本地 canonical 路径。
+    var displayString: String {
+        switch self {
+        case .remoteURL(let url): return url
+        case .localPath(let path): return path
+        }
+    }
+
     /// 规范化远程 URL：忽略协议与认证方式、去 `.git` 尾缀、host 小写、路径大小写不归一。
     /// 无法解析出 host 与仓库路径时返回 nil（Discovery 层据此不生成来源）。
     static func normalize(remoteURL raw: String) -> SkillSourceKey? {

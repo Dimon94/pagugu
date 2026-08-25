@@ -58,64 +58,157 @@ final class IdentityTests: XCTestCase {
         XCTAssertTrue(hosts.isEmpty)
     }
 
-    // MARK: - Skill 目录聚合（ADR-0001 §3：列表条目 = Skill，Installation 聚合为属性）
+    // MARK: - Skill 目录分组（ADR-0001 §3：列表条目 = Skill；Variant F：仓库行是呈现分组）
 
-    func testDirectoryEntriesAggregateSameCanonicalPathIntoOneSkill() {
-        // 跨 root 发现同一 canonical path（如 .claude 和 .agents 各自有独立副本或 symlink 指向同一目标）
-        // → 聚合为 1 个 Skill 条目、2 个 Installation（ADR-0001 §3）
+    func testContentsGroupsSkillsOfSameSourceIntoOneRepositoryRow() {
+        // 套件型仓库：同一工作树根下的多个 Skill 聚合为一行来源仓库（ADR-0001 §2：本地键 = 仓库 canonical 路径）
+        let root = "/Users/dimon/suite-repo"
         let skills = [
             DiscoveredSkill(
-                asFoundPath: "~/.claude/skills/git-commit",
-                canonicalPath: "/Users/dimon/.claude/skills/git-commit",
-                name: "git-commit"
+                asFoundPath: "~/suite-repo/skills/skill-a",
+                canonicalPath: root + "/skills/skill-a",
+                name: "skill-a",
+                repositoryRootPath: root
             ),
             DiscoveredSkill(
-                asFoundPath: "~/.agents/skills/git-commit",
-                canonicalPath: "/Users/dimon/.claude/skills/git-commit", // 同一 canonical path
-                name: "git-commit"
+                asFoundPath: "~/suite-repo/skills/skill-b",
+                canonicalPath: root + "/skills/skill-b",
+                name: "skill-b",
+                repositoryRootPath: root
             ),
         ]
-        let result = ScanResult(outcome: .complete, skills: skills, issues: [])
-        let entries = SkillDirectory.entries(from: result)
+        let contents = SkillDirectory.contents(from: ScanResult(outcome: .complete, skills: skills, issues: []))
 
-        XCTAssertEqual(entries.count, 1, "同一 canonical path 聚合为 1 个 Skill")
-        XCTAssertEqual(entries.first?.installations.count, 2, "2 个 as-found 路径 = 2 个 Installation")
+        XCTAssertEqual(contents.sources.count, 1, "同一工作树根 = 一个来源仓库行")
+        XCTAssertEqual(contents.unattributedInstallations.count, 0)
+        let source = try! XCTUnwrap(contents.sources.first)
+        XCTAssertEqual(source.id, .localPath(root))
+        XCTAssertEqual(source.displayName, "suite-repo")
+        XCTAssertEqual(source.skills.count, 2, "仓库行下挂全部子 Skill")
         XCTAssertEqual(
-            entries.first?.installations.flatMap(\.hosts).sorted(),
-            [.claude, .codex],
-            "Claude 和 Codex 宿主都点亮"
+            Set(source.skills.map(\.id)),
+            [
+                SkillIdentity(sourceKey: .localPath(root), repositoryRelativePath: "skills/skill-a"),
+                SkillIdentity(sourceKey: .localPath(root), repositoryRelativePath: "skills/skill-b"),
+            ],
+            "Skill Identity =（Skill Source Key，仓内相对路径）"
         )
     }
 
-    func testDirectoryEntriesCarryHostAttributionPerInstallation() {
-        // Discovery 层已按 canonical path 去重；Identity 层按 (sourceKey, path) 聚合。
-        // #15 阶段每个 DiscoveredSkill 对应独立本地来源，各自成行。
+    func testContentsAggregatesInstallationsAcrossRootsForSameSkill() {
+        // 跨 root 发现同一 canonical path（软链接指向仓库内 Skill）→ 1 个 Skill、2 个 Installation（ADR-0001 §3）
+        let root = "/Users/dimon/suite-repo"
         let skills = [
             DiscoveredSkill(
-                asFoundPath: "~/.claude/skills/git-commit",
-                canonicalPath: "/Users/dimon/.claude/skills/git-commit",
-                name: "git-commit"
+                asFoundPath: "~/suite-repo/skills/git-commit",
+                canonicalPath: root + "/skills/git-commit",
+                name: "git-commit",
+                repositoryRootPath: root
             ),
             DiscoveredSkill(
-                asFoundPath: "~/.codex/skills/git-commit",
-                canonicalPath: "/Users/dimon/.codex/skills/git-commit",
-                name: "git-commit"
+                asFoundPath: "~/.claude/skills/git-commit",
+                canonicalPath: root + "/skills/git-commit", // 软链接完全解析到同一 canonical path
+                name: "git-commit",
+                repositoryRootPath: root
             ),
         ]
-        let result = ScanResult(outcome: .complete, skills: skills, issues: [])
-        let entries = SkillDirectory.entries(from: result)
+        let contents = SkillDirectory.contents(from: ScanResult(outcome: .complete, skills: skills, issues: []))
 
-        XCTAssertEqual(entries.count, 2, "不同 canonical path = 不同来源 = 各自单列")
-        let claudeEntry = entries.first { $0.installations.first?.hosts.contains(.claude) == true }
-        let codexEntry = entries.first { $0.installations.first?.hosts.contains(.codex) == true }
-        XCTAssertNotNil(claudeEntry)
-        XCTAssertNotNil(codexEntry)
-        XCTAssertEqual(claudeEntry?.installations.first?.asFoundPath, "~/.claude/skills/git-commit")
-        XCTAssertEqual(codexEntry?.installations.first?.asFoundPath, "~/.codex/skills/git-commit")
+        XCTAssertEqual(contents.sources.count, 1)
+        let entry = try! XCTUnwrap(contents.sources.first?.skills.first)
+        XCTAssertEqual(entry.installations.count, 2, "2 个 as-found 路径 = 2 个 Installation")
+        XCTAssertEqual(
+            entry.installations.flatMap(\.hosts).sorted(),
+            [.claude],
+            "宿主归因按 as-found 路径"
+        )
+        let linked = entry.installations.first { $0.asFoundPath == "~/.claude/skills/git-commit" }
+        XCTAssertEqual(linked?.projectionType, .symlink, "asFound ≠ canonical → 软链接投影")
+        let own = entry.installations.first { $0.asFoundPath == "~/suite-repo/skills/git-commit" }
+        XCTAssertEqual(own?.projectionType, .repositorySelf, "asFound == canonical 且在工作树内 → 仓库本体投影")
     }
 
-    func testDirectoryEntriesSeparateSameNameDifferentSource() {
-        // 同名异源：name 相同但 canonical path 不同 → 各自单列（ADR-0001 §5）
+    func testContentsSeparatesSameNameDifferentSource() {
+        // 同名异源：name 相同但仓库根不同 → 各自成行，来源标识不串行（ADR-0001 §5）
+        let skills = [
+            DiscoveredSkill(
+                asFoundPath: "~/repo-a/skills/helper",
+                canonicalPath: "/Users/dimon/repo-a/skills/helper",
+                name: "helper",
+                repositoryRootPath: "/Users/dimon/repo-a"
+            ),
+            DiscoveredSkill(
+                asFoundPath: "~/repo-b/skills/helper",
+                canonicalPath: "/Users/dimon/repo-b/skills/helper",
+                name: "helper",
+                repositoryRootPath: "/Users/dimon/repo-b"
+            ),
+        ]
+        let contents = SkillDirectory.contents(from: ScanResult(outcome: .complete, skills: skills, issues: []))
+
+        XCTAssertEqual(contents.sources.count, 2, "同名异源 = 2 个来源仓库行")
+        XCTAssertEqual(Set(contents.sources.map(\.displayName)), ["repo-a", "repo-b"])
+        for source in contents.sources {
+            XCTAssertEqual(source.skills.count, 1)
+            XCTAssertEqual(source.skills.first?.id.sourceKey, source.id, "子 Skill 来源标识与所在仓库行一致，不串行")
+        }
+    }
+
+    func testContentsMergesIdenticalCopiesByContentFingerprint() {
+        // 内容完全一致（指纹相同）的复制投影聚合为一个只读来源不明条目（#16 修正）
+        let skills = [
+            DiscoveredSkill(
+                asFoundPath: "~/.claude/skills/helper",
+                canonicalPath: "/Users/dimon/.claude/skills/helper",
+                name: "helper",
+                contentFingerprint: "aa11"
+            ),
+            DiscoveredSkill(
+                asFoundPath: "~/.codex/skills/helper",
+                canonicalPath: "/Users/dimon/.codex/skills/helper",
+                name: "helper",
+                contentFingerprint: "aa11"
+            ),
+        ]
+        let contents = SkillDirectory.contents(from: ScanResult(outcome: .complete, skills: skills, issues: []))
+
+        XCTAssertEqual(contents.unattributedInstallations.count, 1, "指纹一致 → 聚合为一个条目")
+        let item = try! XCTUnwrap(contents.unattributedInstallations.first)
+        XCTAssertEqual(item.installations.count, 2, "聚合全部 Installation")
+        XCTAssertEqual(item.hosts, [.claude, .codex], "宿主槽位按安装事实点亮")
+        XCTAssertEqual(
+            Set(item.installations.map(\.canonicalPath)),
+            ["/Users/dimon/.claude/skills/helper", "/Users/dimon/.codex/skills/helper"],
+            "每个 Installation 保留各自 canonical path"
+        )
+        XCTAssertTrue(item.installations.allSatisfy { $0.projectionType == .copy })
+        XCTAssertEqual(item.id, "sha256:aa11", "呈现组以内容指纹为稳定标识")
+    }
+
+    func testContentsDoesNotMergeByNameAlone() {
+        // 禁止只按名称合并：同名但内容不同（指纹不同）仍然分开
+        let skills = [
+            DiscoveredSkill(
+                asFoundPath: "~/.claude/skills/helper",
+                canonicalPath: "/Users/dimon/.claude/skills/helper",
+                name: "helper",
+                contentFingerprint: "aa11"
+            ),
+            DiscoveredSkill(
+                asFoundPath: "~/.codex/skills/helper",
+                canonicalPath: "/Users/dimon/.codex/skills/helper",
+                name: "helper",
+                contentFingerprint: "bb22"
+            ),
+        ]
+        let contents = SkillDirectory.contents(from: ScanResult(outcome: .complete, skills: skills, issues: []))
+
+        XCTAssertEqual(contents.unattributedInstallations.count, 2, "同名不同内容 = 2 个条目")
+        XCTAssertEqual(Set(contents.unattributedInstallations.map(\.displayName)), ["helper"])
+    }
+
+    func testContentsNeverMergesWhenFingerprintMissing() {
+        // fail closed：内容无法完整读取（无指纹）时不自动合并，即使同名同指纹缺失
         let skills = [
             DiscoveredSkill(
                 asFoundPath: "~/.claude/skills/helper",
@@ -123,42 +216,107 @@ final class IdentityTests: XCTestCase {
                 name: "helper"
             ),
             DiscoveredSkill(
-                asFoundPath: "~/.agents/skills/helper",
-                canonicalPath: "/Users/dimon/other-repo/skills/helper",
+                asFoundPath: "~/.codex/skills/helper",
+                canonicalPath: "/Users/dimon/.codex/skills/helper",
                 name: "helper"
             ),
         ]
-        let result = ScanResult(outcome: .complete, skills: skills, issues: [])
-        let entries = SkillDirectory.entries(from: result)
+        let contents = SkillDirectory.contents(from: ScanResult(outcome: .complete, skills: skills, issues: []))
 
-        XCTAssertEqual(entries.count, 2, "same name but different canonical path → 2 entries")
-        XCTAssertEqual(Set(entries.map(\.displayName)), ["helper"])
+        XCTAssertEqual(contents.sources.count, 0, "无工作树根不进来源仓库行")
+        XCTAssertEqual(contents.unattributedInstallations.count, 2, "无指纹不合并，按安装 Canonical Path 各自单列")
+        for item in contents.unattributedInstallations {
+            XCTAssertEqual(item.id, item.canonicalPath, "不可合并单例以安装 Canonical Path 为标识")
+            XCTAssertEqual(item.installations.count, 1)
+            XCTAssertEqual(item.installations.first?.projectionType, .copy, "asFound == canonical 且无工作树 → 复制投影")
+        }
     }
 
-    func testDirectoryEntriesMarkSymlinkInstallations() {
+    func testContentsKeepsSkillAtWorkTreeRootWithEmptyRelativePath() {
+        // SKILL.md 位于仓库根：仓内相对路径为空串，身份仍稳定
+        let root = "/Users/dimon/single-skill-repo"
         let skills = [
             DiscoveredSkill(
-                asFoundPath: "~/.claude/skills/real-skill",
-                canonicalPath: "/Users/dimon/.claude/skills/real-skill",
-                name: "real-skill"
-            ),
-            DiscoveredSkill(
-                asFoundPath: "~/.agents/skills/linked-skill",
-                canonicalPath: "/Users/dimon/.claude/skills/real-skill", // symlink resolves to same canonical
-                name: "linked-skill"
+                asFoundPath: "~/.claude/skills/single-skill-repo",
+                canonicalPath: root,
+                name: "single-skill-repo",
+                repositoryRootPath: root
             ),
         ]
-        let result = ScanResult(outcome: .complete, skills: skills, issues: [])
-        let entries = SkillDirectory.entries(from: result)
+        let contents = SkillDirectory.contents(from: ScanResult(outcome: .complete, skills: skills, issues: []))
 
-        // 同一 canonical path 聚合为 1 个条目，2 个 Installation
-        XCTAssertEqual(entries.count, 1)
-        let entry = try! XCTUnwrap(entries.first)
-        XCTAssertEqual(entry.installations.count, 2)
+        XCTAssertEqual(contents.sources.count, 1)
+        XCTAssertEqual(
+            contents.sources.first?.skills.first?.id,
+            SkillIdentity(sourceKey: .localPath(root), repositoryRelativePath: "")
+        )
+    }
 
-        let linked = entry.installations.first { $0.asFoundPath == "~/.agents/skills/linked-skill" }
-        XCTAssertEqual(linked?.isSymlink, true, "asFound ≠ canonical → isSymlink = true")
-        let real = entry.installations.first { $0.asFoundPath == "~/.claude/skills/real-skill" }
-        XCTAssertEqual(real?.isSymlink, false, "asFound == canonical → isSymlink = false")
+    // MARK: - Discovery Origin 安装产生规则（#18）：纯来源 Skill 保持零 Installation
+
+    func testContentsProducesNoInstallationForProjectRootSkillWithoutHosts() {
+        // Project Scan Root 内、无宿主归因的 as-found 路径不产生 Installation（纯来源 Skill）
+        let root = "/Users/dimon/suite-repo"
+        let skills = [
+            DiscoveredSkill(
+                asFoundPath: "~/Code/suite-repo/skills/skill-a",
+                canonicalPath: root + "/skills/skill-a",
+                name: "skill-a",
+                origin: .projectScanRoot,
+                repositoryRootPath: root
+            ),
+        ]
+        let contents = SkillDirectory.contents(from: ScanResult(outcome: .complete, skills: skills, issues: []))
+
+        XCTAssertEqual(contents.sources.count, 1)
+        let entry = try! XCTUnwrap(contents.sources.first?.skills.first)
+        XCTAssertTrue(entry.installations.isEmpty, "纯来源 Skill 保持零 Installation")
+        XCTAssertTrue(entry.hosts.isEmpty, "无安装则宿主槽位全灰")
+    }
+
+    func testContentsProducesInstallationForProjectRootSkillWithHostAttribution() {
+        // Project Scan Root 内的宿主目录（如镜像的 .claude/skills）仍产生 Installation
+        let root = "/Users/dimon/suite-repo"
+        let skills = [
+            DiscoveredSkill(
+                asFoundPath: "~/Backup/.claude/skills/skill-a",
+                canonicalPath: root + "/skills/skill-a",
+                name: "skill-a",
+                origin: .projectScanRoot,
+                repositoryRootPath: root
+            ),
+        ]
+        let contents = SkillDirectory.contents(from: ScanResult(outcome: .complete, skills: skills, issues: []))
+
+        let entry = try! XCTUnwrap(contents.sources.first?.skills.first)
+        XCTAssertEqual(entry.installations.count, 1, "带宿主归因的 project 入口产生 Installation")
+        XCTAssertEqual(entry.hosts, [.claude])
+    }
+
+    func testContentsNeverMergesZeroInstallationRepoLessSkills() {
+        // 零安装的纯来源发现永不按指纹合并：身份即自身位置，内容一致不推断同一 Skill
+        let skills = [
+            DiscoveredSkill(
+                asFoundPath: "~/Code/work-in-progress/helper",
+                canonicalPath: "/Users/dimon/Code/work-in-progress/helper",
+                name: "helper",
+                origin: .projectScanRoot,
+                contentFingerprint: "aa11"
+            ),
+            DiscoveredSkill(
+                asFoundPath: "~/.claude/skills/helper",
+                canonicalPath: "/Users/dimon/.claude/skills/helper",
+                name: "helper",
+                contentFingerprint: "aa11"
+            ),
+        ]
+        let contents = SkillDirectory.contents(from: ScanResult(outcome: .complete, skills: skills, issues: []))
+
+        XCTAssertEqual(contents.unattributedInstallations.count, 2, "零安装纯来源发现不与安装复制合并")
+        let installed = contents.unattributedInstallations.first { !$0.installations.isEmpty }
+        let sourceOnly = contents.unattributedInstallations.first { $0.installations.isEmpty }
+        XCTAssertNotNil(installed)
+        XCTAssertNotNil(sourceOnly)
+        XCTAssertEqual(sourceOnly?.id, "/Users/dimon/Code/work-in-progress/helper", "零安装单例以安装 Canonical Path 为标识")
     }
 }

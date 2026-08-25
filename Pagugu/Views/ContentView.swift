@@ -3,14 +3,18 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 // L3 COORD: Pagugu/Views/ContentView.swift
-// POS: 主窗口内容（Variant F 主从结构的 #15 简化版）。
-//      左侧：平铺 Skill 目录行（宿主 logo 槽位点亮/灰显）；
-//      右侧：欢迎引导或详情；工具栏管理 Project Scan Root；Registry 故障由全窗口门面接管。
-// TEST: repo://PaguguTests/AppModelTests.swift（AppModel 正常/阻断投影 smoke）。
+// POS: 主窗口内容（Variant F 主从结构，#16 落地目录 IA 与 Skill 详情三块）。
+//      左侧：平铺目录——来源仓库行（可收起/展开子 Skill 行，默认展开，chevron 独立热区）
+//      + 无仓库可归行（来源不明）；无分组标题、无筛选 UI。
+//      右侧：Skill 详情三块（安装位置、来源标识、SKILL.md 原文只读可选中）；
+//      空选择回欢迎引导。「状态与检出」「相关记录」「更新动作」块归后续票。
+//      工具栏管理 Project Scan Root；Registry 故障由全窗口门面接管。
+//      View 只消费 Skill Read Model、只发 AppModel intent，不做 IO。
+// TEST: repo://PaguguTests/AppModelTests.swift（AppModel 正常/阻断投影与 intent 路由 smoke）。
 
 struct ContentView: View {
     @ObservedObject var model: AppModel
-    @State private var selectedEntryID: SkillIdentity?
+    @State private var selection: SkillDirectoryNode?
     @State private var showsProjectScanRoots = false
     @State private var showsProjectRootImporter = false
 
@@ -76,23 +80,14 @@ struct ContentView: View {
 
     private var skillBrowser: some View {
         NavigationSplitView {
-            // 左侧：平铺 Skill 目录
             SkillDirectoryListView(
-                entries: model.readModel.entries,
-                issues: model.readModel.issues,
-                scanOutcome: model.readModel.scanOutcome,
-                selection: $selectedEntryID
+                readModel: model.readModel,
+                collapsedSources: model.collapsedSources,
+                onToggleSource: { model.toggleSourceCollapsed($0) },
+                selection: $selection
             )
         } detail: {
-            // 右侧：欢迎引导或详情
-            if let selectedID = selectedEntryID,
-               let entry = model.readModel.entries.first(where: { $0.id == selectedID }) {
-                SkillInfoPanel(entry: entry)
-            } else {
-                WelcomePanel {
-                    showsProjectRootImporter = true
-                }
-            }
+            detailView
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -100,6 +95,46 @@ struct ContentView: View {
                     showsProjectScanRoots = true
                 }
             }
+        }
+    }
+
+    // MARK: - 右侧详情（与目录选择联动；空选择或选择失效回欢迎引导）
+
+    @ViewBuilder
+    private var detailView: some View {
+        switch selection {
+        case .source(let key):
+            if let source = model.readModel.sourceItem(for: key) {
+                SkillSourcePanel(source: source, onSelectSkill: { selection = .skill($0) })
+            } else {
+                welcomePanel
+            }
+        case .skill(let identity):
+            if let entry = model.readModel.skillEntry(for: identity) {
+                SkillDetailPanel(
+                    entry: entry,
+                    markdown: model.skillMarkdown(canonicalPath: entry.canonicalPath)
+                )
+            } else {
+                welcomePanel
+            }
+        case .unattributedInstallation(let id):
+            if let item = model.readModel.unattributedItem(for: id) {
+                UnattributedInstallationPanel(
+                    item: item,
+                    markdown: model.skillMarkdown(canonicalPath: item.canonicalPath)
+                )
+            } else {
+                welcomePanel
+            }
+        case nil:
+            welcomePanel
+        }
+    }
+
+    private var welcomePanel: some View {
+        WelcomePanel {
+            showsProjectRootImporter = true
         }
     }
 }
@@ -228,25 +263,25 @@ private struct RegistryRecoveryView: View {
 // MARK: - 左侧目录
 
 private struct SkillDirectoryListView: View {
-    let entries: [SkillDirectoryEntry]
-    let issues: [ScanIssue]
-    let scanOutcome: ScanOutcome
-    @Binding var selection: SkillIdentity?
+    let readModel: SkillReadModel
+    let collapsedSources: Set<SkillSourceKey>
+    let onToggleSource: (SkillSourceKey) -> Void
+    @Binding var selection: SkillDirectoryNode?
 
     var body: some View {
         Group {
-            if entries.isEmpty && issues.isEmpty {
+            if readModel.isEmpty {
                 // 正常空态
                 ContentUnavailableView(
                     "未发现 Skill",
                     systemImage: "tray",
-                    description: Text("三个 Personal Skill Root 下没有可解析的 Skill。")
+                    description: Text("三个 Personal Skill Root 与已保存的 Project Scan Root 下没有可解析的 Skill。")
                 )
             } else {
                 List(selection: $selection) {
-                    if !issues.isEmpty {
+                    if !readModel.issues.isEmpty {
                         Section {
-                            ForEach(issues, id: \.path) { issue in
+                            ForEach(readModel.issues, id: \.path) { issue in
                                 VStack(alignment: .leading, spacing: 2) {
                                     Label("扫描问题", systemImage: "exclamationmark.triangle")
                                         .font(.caption)
@@ -263,9 +298,9 @@ private struct SkillDirectoryListView: View {
                     }
 
                     Section {
-                        ForEach(entries) { entry in
-                            SkillDirectoryRow(entry: entry)
-                                .tag(entry.id)
+                        ForEach(readModel.directoryNodes(collapsedSources: collapsedSources), id: \.self) { node in
+                            row(for: node)
+                                .tag(node)
                         }
                     }
                 }
@@ -273,24 +308,119 @@ private struct SkillDirectoryListView: View {
         }
         .navigationTitle("Skills")
     }
+
+    @ViewBuilder
+    private func row(for node: SkillDirectoryNode) -> some View {
+        switch node {
+        case .source(let key):
+            if let source = readModel.sourceItem(for: key) {
+                SkillSourceRow(
+                    source: source,
+                    isCollapsed: collapsedSources.contains(key),
+                    onToggle: { onToggleSource(key) }
+                )
+            }
+        case .skill(let identity):
+            if let entry = readModel.skillEntry(for: identity) {
+                SkillRow(entry: entry)
+            }
+        case .unattributedInstallation(let id):
+            if let item = readModel.unattributedItem(for: id) {
+                UnattributedInstallationRow(item: item)
+            }
+        }
+    }
 }
 
-private struct SkillDirectoryRow: View {
-    let entry: SkillDirectoryEntry
+// MARK: - 来源仓库行（呈现分组；chevron 独立热区，不误触行选择）
+
+private struct SkillSourceRow: View {
+    let source: SkillSourceItem
+    let isCollapsed: Bool
+    let onToggle: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(entry.displayName)
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Button(action: onToggle) {
+                    Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18, height: 18)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(isCollapsed ? "展开" : "收起")
 
-            // 宿主 logo 槽位（ADR-0009 §15）：点亮 = 已安装，灰显 = 未安装
-            HostLogoSlots(hosts: allHosts)
+                Text(source.displayName)
+                    .font(.headline)
+                Spacer()
+                HostLogoSlots(hosts: source.hosts)
+            }
+            Text(source.id.displayString)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.leading, 24)
         }
         .padding(.vertical, 2)
     }
+}
 
-    private var allHosts: Set<AgentHost> {
-        Set(entry.installations.flatMap(\.hosts))
+// MARK: - 仓库下的子 Skill 行
+
+private struct SkillRow: View {
+    let entry: SkillDirectoryEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(entry.displayName)
+                    .font(.callout)
+                Spacer()
+                HostLogoSlots(hosts: entry.hosts)
+            }
+            if entry.id.repositoryRelativePath != entry.displayName {
+                Text(entry.id.repositoryRelativePath.isEmpty ? "（仓库根目录）" : entry.id.repositoryRelativePath)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.leading, 24)
+        .padding(.vertical, 2)
+    }
+}
+
+// MARK: - 无仓库可归行（来源不明）
+
+private struct UnattributedInstallationRow: View {
+    let item: UnattributedInstallationItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                Text(item.displayName)
+                    .font(.callout)
+                Text("来源不明")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                Spacer()
+                HostLogoSlots(hosts: item.hosts)
+            }
+            // 消歧 caption：聚合组显示安装位置数，单例显示路径（同名不同内容按此区分）
+            Text(item.installations.count > 1
+                 ? "\(item.installations.count) 个安装位置"
+                 : (item.installations.first?.asFoundPath ?? item.canonicalPath))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .padding(.vertical, 2)
     }
 }
 
@@ -321,51 +451,47 @@ private struct HostLogoDot: View {
     }
 }
 
-// MARK: - 右侧详情
+// MARK: - 右侧详情：来源仓库行
 
-private struct SkillInfoPanel: View {
-    let entry: SkillDirectoryEntry
+private struct SkillSourcePanel: View {
+    let source: SkillSourceItem
+    let onSelectSkill: (SkillIdentity) -> Void
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                // 基础信息
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(entry.displayName)
+                    Text(source.displayName)
                         .font(.title2.bold())
-
-                    HostLogoSlots(hosts: Set(entry.installations.flatMap(\.hosts)))
+                    HostLogoSlots(hosts: source.hosts)
                 }
 
                 Divider()
 
-                // 安装位置
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("安装位置")
+                    Text("包含的 Skill（\(source.skills.count) 个）")
                         .font(.headline)
-                    ForEach(entry.installations, id: \.asFoundPath) { inst in
-                        HStack {
-                            Text(inst.asFoundPath)
-                                .font(.body.monospaced())
-                                .textSelection(.enabled)
-                            if inst.isSymlink {
-                                Image(systemName: "link")
-                                    .foregroundStyle(.secondary)
+                    ForEach(source.skills) { entry in
+                        Button {
+                            onSelectSkill(entry.id)
+                        } label: {
+                            HStack {
+                                Text(entry.displayName)
+                                    .font(.body)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
                             }
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
                     }
                 }
 
                 Divider()
 
-                // 来源标识
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("来源标识")
-                        .font(.headline)
-                    Text(sourceKeyDescription)
-                        .font(.body.monospaced())
-                        .textSelection(.enabled)
-                }
+                SourceIdentityBlock(sourceKey: source.id, repositoryRelativePath: nil)
 
                 Spacer()
             }
@@ -373,11 +499,188 @@ private struct SkillInfoPanel: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
+}
 
-    private var sourceKeyDescription: String {
-        switch entry.id.sourceKey {
-        case .remoteURL(let url): return url
-        case .localPath(let path): return path
+// MARK: - 右侧详情：Skill（三块：安装位置、来源标识、SKILL.md 原文）
+
+private struct SkillDetailPanel: View {
+    let entry: SkillDirectoryEntry
+    let markdown: String?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(entry.displayName)
+                        .font(.title2.bold())
+                    HostLogoSlots(hosts: entry.hosts)
+                }
+
+                Divider()
+
+                InstallationsBlock(installations: entry.installations)
+
+                Divider()
+
+                SourceIdentityBlock(
+                    sourceKey: entry.id.sourceKey,
+                    repositoryRelativePath: entry.id.repositoryRelativePath
+                )
+
+                Divider()
+
+                MarkdownSourceBlock(markdown: markdown)
+
+                Spacer()
+            }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+// MARK: - 右侧详情：无仓库可归（来源不明）
+
+private struct UnattributedInstallationPanel: View {
+    let item: UnattributedInstallationItem
+    let markdown: String?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(item.displayName)
+                        .font(.title2.bold())
+                    HostLogoSlots(hosts: item.hosts)
+                }
+
+                Divider()
+
+                InstallationsBlock(installations: item.installations)
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("来源标识")
+                        .font(.headline)
+                    Text("来源不明")
+                        .font(.body)
+                        .foregroundStyle(.orange)
+                    Text("复制投影未关联任何已发现 Skill Source；不参与更新。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if item.installations.count > 1 {
+                        Text("内容完全一致的 \(item.installations.count) 个安装位置已聚合为一个条目（仍来源不明、不可更新）。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Divider()
+
+                MarkdownSourceBlock(markdown: markdown)
+
+                Spacer()
+            }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+// MARK: - 详情块：安装位置（路径 + 宿主 + 投影/归因）
+
+private struct InstallationsBlock: View {
+    let installations: [SkillInstallation]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("安装位置")
+                .font(.headline)
+            if installations.isEmpty {
+                Text("未安装到任何 Agent Host（仅在扫描范围内发现）。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(installations, id: \.asFoundPath) { installation in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(installation.asFoundPath)
+                        .font(.body.monospaced())
+                        .textSelection(.enabled)
+                    // 软链接安装的解析目标（归因证据）；as-found 即 canonical 时不重复显示
+                    if installation.canonicalPath != (installation.asFoundPath as NSString).expandingTildeInPath {
+                        Text("→ \(installation.canonicalPath)")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    HStack(spacing: 6) {
+                        HostLogoSlots(hosts: installation.hosts)
+                        Text(installation.projectionType.displayName + attributionNote(for: installation.projectionType))
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func attributionNote(for type: ProjectionType) -> String {
+        switch type {
+        case .symlink: return " · 已归因到本来源"
+        case .repositorySelf: return " · 安装路径即来源工作树"
+        case .copy: return " · 来源不明"
+        }
+    }
+}
+
+// MARK: - 详情块：来源标识
+
+private struct SourceIdentityBlock: View {
+    let sourceKey: SkillSourceKey
+    let repositoryRelativePath: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("来源标识")
+                .font(.headline)
+            LabeledContent("Skill Source Key") {
+                Text(sourceKey.displayString)
+                    .font(.body.monospaced())
+                    .textSelection(.enabled)
+            }
+            if let repositoryRelativePath {
+                LabeledContent("仓内相对路径") {
+                    Text(repositoryRelativePath.isEmpty ? "（仓库根目录）" : repositoryRelativePath)
+                        .font(.body.monospaced())
+                        .textSelection(.enabled)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 详情块：SKILL.md 原文（只读、可选中）
+
+private struct MarkdownSourceBlock: View {
+    let markdown: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("SKILL.md 原文（只读）")
+                .font(.headline)
+            if let markdown {
+                Text(markdown)
+                    .font(.callout.monospaced())
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 6))
+            } else {
+                Text("无法读取 SKILL.md。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 }

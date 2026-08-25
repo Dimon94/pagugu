@@ -35,8 +35,8 @@ _Avoid_: 把安装投影反向当成 Skill Source、覆盖同名异源内容。
 : Skill Installation 的形态分类：软链接、复制、仓库本体（安装路径即 Skill Source 工作树）。软链接完全解析后归因到目标所在的 Skill Source；复制不自动归因。
 
 **Unattributed Installation**
-: 无法唯一归因到 Skill Source 的 Skill Installation（界面标注「来源不明」）：软链接目标不在任何已发现 Skill Source 内，或复制投影没有有效的来源映射。不参与去重合并、不可更新，维护有效来源映射后获得身份。
-_Avoid_: 用内容哈希或相似度启发式自动归因复制投影（MVP 1.0 不做）。
+: 无法唯一归因到 Skill Source 的 Skill Installation（界面标注「来源不明」）：软链接目标不在任何已发现 Skill Source 内，或复制投影没有有效的来源映射。不可更新，维护有效来源映射后获得身份。内容完全一致的多个复制安装（完整内容指纹相同）自动聚合为一个只读呈现组：一个条目聚合全部安装位置与 Agent Host 槽位；内容不同或读取不完整时各自单列。聚合仅是呈现，不推断 Skill Source 或更新目标。
+_Avoid_: 用内容哈希或相似度启发式把复制投影归因到 Skill Source（MVP 1.0 不做）；只按名称合并复制投影。
 
 **Skill Identity**
 : 判定同一个 Skill 的稳定事实，由 Skill Source Key 与 Skill 在仓库内的相对路径构成。frontmatter `name` 与安装目录名只是展示元数据，不参与身份判定。

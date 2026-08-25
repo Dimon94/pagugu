@@ -2,9 +2,11 @@ import Foundation
 
 // L3 COORD: Pagugu/AppModel/AppModel.swift
 // POS: AppModel 模块（ADR-0009 §7）。@MainActor composition root：
-//      owns Skill Read Model、受限恢复模式投影、全部 UI intent 与启动/刷新编排。
-//      does not own 直接 Git/文件系统/持久 IO、业务规则重建。
-// TEST: repo://PaguguTests/AppModelTests.swift（Registry gate、Project Scan Root intent 与扫描刷新 smoke）。
+//      owns Skill Read Model、受限恢复模式投影、目录收起 UI 状态、全部 UI intent
+//      与启动/刷新编排。does not own 直接 Git/文件系统/持久 IO（经 Discovery/Registry seam）、
+//      业务规则重建。
+// TEST: repo://PaguguTests/AppModelTests.swift（Registry gate、Project Scan Root intent、
+//      目录投影与 intent 路由 smoke）。
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -15,6 +17,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var registryRecovery: RegistryRecovery?
     @Published private(set) var registryReady = false
     @Published private(set) var projectScanRootError: ProjectScanRootError?
+
+    /// 收起的来源仓库行集合（默认全部展开）。瞬态 UI 状态，不持久化。
+    @Published private(set) var collapsedSources: Set<SkillSourceKey> = []
 
     // MARK: - 内部依赖（构造注入）
 
@@ -51,9 +56,10 @@ final class AppModel: ObservableObject {
             personalRoots: personalRoots,
             projectRoots: projectScanRoots.filter(\.passesGuardrails).map(\.canonicalPath)
         )
-        let entries = SkillDirectory.entries(from: scanResult)
+        let contents = SkillDirectory.contents(from: scanResult)
         readModel = SkillReadModel(
-            entries: entries,
+            sources: contents.sources,
+            unattributedInstallations: contents.unattributedInstallations,
             issues: scanResult.issues,
             scanOutcome: scanResult.outcome,
             projectScanRoots: projectScanRoots
@@ -116,6 +122,20 @@ final class AppModel: ObservableObject {
         } catch {
             // 未确认与其他失败保持现有阻断态，不制造内存 fallback。
         }
+    }
+
+    /// 收起/展开来源仓库行的子 Skill 列表（chevron 独立热区触发的纯 UI intent）。
+    func toggleSourceCollapsed(_ key: SkillSourceKey) {
+        if collapsedSources.contains(key) {
+            collapsedSources.remove(key)
+        } else {
+            collapsedSources.insert(key)
+        }
+    }
+
+    /// 读取所选条目的 SKILL.md 原文（只读、可选中展示）；读取失败返回 nil。
+    func skillMarkdown(canonicalPath: String) -> String? {
+        Discovery.skillMarkdown(atCanonicalPath: canonicalPath)
     }
 
     private func handleProjectScanRootError(_ error: ProjectScanRootError) {
