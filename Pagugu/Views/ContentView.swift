@@ -1,16 +1,35 @@
+import AppKit
 import SwiftUI
 
 // L3 COORD: Pagugu/Views/ContentView.swift
 // POS: 主窗口内容（Variant F 主从结构的 #15 简化版）。
 //      左侧：平铺 Skill 目录行（宿主 logo 槽位点亮/灰显）；
-//      右侧：欢迎引导（空态）或所选条目基础信息。
-// TEST: repo://PaguguTests/AppModelTests.swift（AppModel 投影 smoke）。
+//      右侧：欢迎引导或详情；Registry 加载与受限恢复时由全窗口门面接管。
+// TEST: repo://PaguguTests/AppModelTests.swift（AppModel 正常/阻断投影 smoke）。
 
 struct ContentView: View {
-    @StateObject private var model = AppModel()
+    @ObservedObject var model: AppModel
     @State private var selectedEntryID: SkillIdentity?
 
     var body: some View {
+        Group {
+            if let recovery = model.registryRecovery {
+                RegistryRecoveryView(recovery: recovery) {
+                    await model.resetRegistry(confirmed: true)
+                }
+            } else if model.registryReady {
+                skillBrowser
+            } else {
+                ProgressView("正在载入 App Registry…")
+            }
+        }
+        .frame(minWidth: 860, minHeight: 560)
+        .task {
+            await model.start()
+        }
+    }
+
+    private var skillBrowser: some View {
         NavigationSplitView {
             // 左侧：平铺 Skill 目录
             SkillDirectoryListView(
@@ -28,9 +47,54 @@ struct ContentView: View {
                 WelcomePanel()
             }
         }
-        .frame(minWidth: 860, minHeight: 560)
-        .onAppear {
-            model.start()
+    }
+}
+
+// MARK: - Registry 受限恢复
+
+private struct RegistryRecoveryView: View {
+    let recovery: RegistryRecovery
+    let reset: () async -> Void
+    @State private var showsResetConfirmation = false
+
+    var body: some View {
+        ContentUnavailableView {
+            Label("App Registry 需要恢复", systemImage: "exclamationmark.lock")
+        } description: {
+            VStack(spacing: 8) {
+                Text(description)
+                Text(recovery.evidenceURL.path)
+                    .font(.body.monospaced())
+                    .textSelection(.enabled)
+            }
+        } actions: {
+            Button("重置为空 Registry", role: .destructive) {
+                showsResetConfirmation = true
+            }
+            Button("退出自行修复") {
+                NSApplication.shared.terminate(nil)
+            }
+        }
+        .alert("确认重置 App Registry？", isPresented: $showsResetConfirmation) {
+            Button("取消", role: .cancel) {}
+            Button("重置为空 Registry", role: .destructive) {
+                Task { await reset() }
+            }
+        } message: {
+            Text(Persistence.resetImpact)
+        }
+    }
+
+    private var description: String {
+        switch recovery.kind {
+        case .corrupt:
+            return "Registry 已损坏。原文件已保留。你可以重置为空 Registry，或退出后自行修复。"
+        case .unknownFutureVersion:
+            return "Registry 来自更新版本。请升级 Pagugu，或退出后自行修复。应用不会覆写该文件。"
+        case .externallyModified:
+            return "检测到 Registry 被外部修改。请退出并重新打开 Pagugu，或确认重置。"
+        case .writeFailed:
+            return "Registry 写入失败。请检查磁盘空间与目录权限后重试，或退出自行修复。"
         }
     }
 }
@@ -205,5 +269,5 @@ private struct WelcomePanel: View {
 }
 
 #Preview {
-    ContentView()
+    ContentView(model: AppModel())
 }

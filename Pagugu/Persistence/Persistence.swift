@@ -1,0 +1,426 @@
+import Darwin
+import Foundation
+
+// L3 COORD: Pagugu/Persistence/Persistence.swift
+// INPUT: Application Support 目录或测试注入目录中的 registry.json。
+// OUTPUT: RegistryDocument 当前主张，或阻断式 RegistryRecovery。
+// POS: Persistence 物理 owner。只依赖 Foundation，不拥有主张语义。
+// TEST: repo://PaguguTests/PersistenceTests.swift。
+
+// L5 PARAM: schemaVersion 当前只接受 1。顶层恰好编码三类集合；未知字段可忽略且重写不保留。
+// PAIR: CheckoutObservation success 必须有 remoteTipSHA；failure 必须没有。
+// FAIL: 缺字段、类型不符、路径/身份配对无效均走损坏 quarantine。
+struct RegistryDocument: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = 1
+    static let empty = RegistryDocument(
+        schemaVersion: currentSchemaVersion,
+        projectScanRoots: [],
+        sourceMappings: [:],
+        checkoutObservations: [:]
+    )
+
+    let schemaVersion: Int
+    let projectScanRoots: [ProjectScanRootRecord]
+    let sourceMappings: [String: SourceMappingRecord]
+    let checkoutObservations: [String: CheckoutObservation]
+
+    fileprivate func validate() throws {
+        guard schemaVersion == Self.currentSchemaVersion else {
+            throw RegistryValidationError.invalidSchemaVersion
+        }
+
+        let rootPaths = projectScanRoots.map(\.canonicalPath)
+        guard Set(rootPaths).count == rootPaths.count,
+              projectScanRoots.allSatisfy({
+                  isNormalizedAbsolutePath($0.canonicalPath) && isNormalizedAbsolutePath($0.asFoundPath)
+              }) else {
+            throw RegistryValidationError.invalidProjectScanRoot
+        }
+
+        guard sourceMappings.allSatisfy({ key, value in
+            isNormalizedAbsolutePath(key) && !value.skillSourceKey.isEmpty &&
+                isNormalizedRelativePath(value.repositoryRelativePath)
+        }) else {
+            throw RegistryValidationError.invalidSourceMapping
+        }
+
+        guard checkoutObservations.allSatisfy({ key, observation in
+            isNormalizedAbsolutePath(key) &&
+                key == observation.identityDigest.checkoutCanonicalPath && observation.isValid
+        }) else {
+            throw RegistryValidationError.invalidCheckoutObservation
+        }
+    }
+}
+
+struct ProjectScanRootRecord: Codable, Equatable, Sendable {
+    let canonicalPath: String
+    let asFoundPath: String
+}
+
+struct SourceMappingRecord: Codable, Equatable, Sendable {
+    let skillSourceKey: String
+    let repositoryRelativePath: String
+}
+
+struct CheckoutObservation: Codable, Equatable, Sendable {
+    enum Result: String, Codable, Equatable, Sendable {
+        case success
+        case failure
+    }
+
+    let result: Result
+    let completedAt: Date
+    let remoteTipSHA: String?
+    let identityDigest: CheckoutIdentityDigest
+
+    fileprivate var isValid: Bool {
+        let digestValues = [
+            identityDigest.checkoutCanonicalPath,
+            identityDigest.gitCommonDirIdentifier,
+            identityDigest.normalizedRemoteURL,
+            identityDigest.branchName,
+            identityDigest.upstreamRefName,
+        ]
+        let hasRequiredTip = result == .success ? !(remoteTipSHA?.isEmpty ?? true) : remoteTipSHA == nil
+        return hasRequiredTip && isNormalizedAbsolutePath(identityDigest.checkoutCanonicalPath) &&
+            digestValues.allSatisfy { !$0.isEmpty }
+    }
+}
+
+struct CheckoutIdentityDigest: Codable, Equatable, Sendable {
+    let checkoutCanonicalPath: String
+    let gitCommonDirIdentifier: String
+    let normalizedRemoteURL: String
+    let branchName: String
+    let upstreamRefName: String
+}
+
+struct RegistryRecovery: Equatable, Sendable {
+    enum Kind: Equatable, Sendable {
+        case corrupt
+        case unknownFutureVersion
+        case externallyModified
+        case writeFailed
+    }
+
+    let kind: Kind
+    let evidenceURL: URL
+}
+
+enum RegistryLoadResult: Equatable, Sendable {
+    case ready(RegistryDocument)
+    case restricted(RegistryRecovery)
+}
+
+enum PersistenceError: Error, Equatable, Sendable {
+    case notLoaded
+    case invalidDocument
+    case recoveryRequired(RegistryRecovery)
+    case externallyModified(RegistryRecovery)
+    case writeFailed(RegistryRecovery)
+    case resetConfirmationRequired
+}
+
+private enum RegistryValidationError: Error {
+    case invalidSchemaVersion
+    case invalidProjectScanRoot
+    case invalidSourceMapping
+    case invalidCheckoutObservation
+}
+
+private func isNormalizedAbsolutePath(_ path: String) -> Bool {
+    path.hasPrefix("/") && (path as NSString).standardizingPath == path
+}
+
+private func isNormalizedRelativePath(_ path: String) -> Bool {
+    !path.isEmpty && !path.hasPrefix("/") && path != "." &&
+        !(path as NSString).pathComponents.contains("..") &&
+        (path as NSString).standardizingPath == path
+}
+
+actor Persistence {
+    typealias AtomicWriteHook = @Sendable () throws -> Void
+
+    static let live: Persistence = {
+        let applicationSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support", isDirectory: true)
+        return Persistence(
+            directoryURL: applicationSupport.appendingPathComponent("com.dimon.pagugu", isDirectory: true)
+        )
+    }()
+
+    static let resetImpact = "将清空全部 Project Scan Root、来源映射与逐检出上次观察。前两项需人工重建；观察可通过重新检查重建。不会删除 Skill Source、Skill Installation 或 Git 工作树。"
+
+    private let directoryURL: URL
+    private let registryURL: URL
+    private let beforeAtomicReplace: AtomicWriteHook
+    private var loadResult: RegistryLoadResult?
+    private var knownRegistryBytes: Data?
+
+    init(
+        directoryURL: URL,
+        beforeAtomicReplace: @escaping AtomicWriteHook = {}
+    ) {
+        self.directoryURL = directoryURL
+        self.registryURL = directoryURL.appendingPathComponent("registry.json")
+        self.beforeAtomicReplace = beforeAtomicReplace
+    }
+
+    /// L4 IN: 首次调用固定本进程的 last-good 字节基线。
+    /// OUT: 缺文件返回正常空态；损坏文件先 quarantine；未来版本保持原位。
+    /// FAIL: 任何不能完整理解的 Registry 均进入阻断式受限恢复模式。
+    func loadRegistry() -> RegistryLoadResult {
+        if let loadResult {
+            return loadResult
+        }
+
+        guard FileManager.default.fileExists(atPath: registryURL.path) else {
+            return remember(.ready(.empty), bytes: nil)
+        }
+
+        let bytes: Data
+        do {
+            bytes = try Data(contentsOf: registryURL)
+        } catch {
+            return remember(
+                .restricted(RegistryRecovery(kind: .corrupt, evidenceURL: registryURL)),
+                bytes: nil
+            )
+        }
+
+        do {
+            let schemaVersion = try decodeSchemaVersion(from: bytes)
+            if schemaVersion > RegistryDocument.currentSchemaVersion {
+                return remember(
+                    .restricted(
+                        RegistryRecovery(kind: .unknownFutureVersion, evidenceURL: registryURL)
+                    ),
+                    bytes: bytes
+                )
+            }
+
+            guard schemaVersion == RegistryDocument.currentSchemaVersion else {
+                throw RegistryValidationError.invalidSchemaVersion
+            }
+
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let document = try decoder.decode(RegistryDocument.self, from: bytes)
+            try document.validate()
+            return remember(.ready(document), bytes: bytes)
+        } catch {
+            let evidenceURL = quarantineCorruptRegistry()
+            return remember(
+                .restricted(RegistryRecovery(kind: .corrupt, evidenceURL: evidenceURL)),
+                bytes: nil
+            )
+        }
+    }
+
+    /// L4 IN: 必须先完成 loadRegistry；document 必须满足 v1 schema。
+    /// OUT: 双 fsync 与 rename 全部成功后才更新 last-good 内存投影。
+    /// FAIL: 磁盘字节漂移时绝不覆写；写失败保留原磁盘与原内存投影。
+    func saveRegistry(_ document: RegistryDocument) throws {
+        guard let loadResult else {
+            throw PersistenceError.notLoaded
+        }
+        guard case .ready = loadResult else {
+            if case .restricted(let recovery) = loadResult {
+                throw PersistenceError.recoveryRequired(recovery)
+            }
+            throw PersistenceError.notLoaded
+        }
+
+        do {
+            try document.validate()
+        } catch {
+            throw PersistenceError.invalidDocument
+        }
+
+        let diskBytes: Data?
+        do {
+            diskBytes = FileManager.default.fileExists(atPath: registryURL.path)
+                ? try Data(contentsOf: registryURL)
+                : nil
+        } catch {
+            let recovery = RegistryRecovery(kind: .writeFailed, evidenceURL: registryURL)
+            throw PersistenceError.writeFailed(recovery)
+        }
+
+        guard diskBytes == knownRegistryBytes else {
+            let recovery = RegistryRecovery(kind: .externallyModified, evidenceURL: registryURL)
+            self.loadResult = .restricted(recovery)
+            throw PersistenceError.externallyModified(recovery)
+        }
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let bytes: Data
+        do {
+            bytes = try encoder.encode(document)
+            try ensureDirectory()
+            try writeDurably(bytes, to: registryURL)
+        } catch {
+            let recovery = RegistryRecovery(kind: .writeFailed, evidenceURL: registryURL)
+            throw PersistenceError.writeFailed(recovery)
+        }
+
+        knownRegistryBytes = bytes
+        self.loadResult = .ready(document)
+    }
+
+    /// L4 IN: confirmed 必须由显式确认对话框传入。
+    /// OUT: 先 quarantine 当前 registry.json，再原子写入空 v1；返回保留的证据路径。
+    /// FAIL: 未确认零副作用；quarantine 或写入失败时不提交空内存投影。
+    func resetRegistry(confirmed: Bool) throws -> URL? {
+        guard confirmed else {
+            throw PersistenceError.resetConfirmationRequired
+        }
+        guard let loadResult else {
+            throw PersistenceError.notLoaded
+        }
+
+        var evidenceURL: URL?
+        if FileManager.default.fileExists(atPath: registryURL.path) {
+            do {
+                try ensureDirectory()
+                evidenceURL = try quarantineRegistry(prefix: "registry.reset")
+            } catch {
+                let recovery = RegistryRecovery(kind: .writeFailed, evidenceURL: registryURL)
+                throw PersistenceError.writeFailed(recovery)
+            }
+        } else if case .restricted(let recovery) = loadResult,
+                  recovery.evidenceURL != registryURL,
+                  FileManager.default.fileExists(atPath: recovery.evidenceURL.path) {
+            evidenceURL = recovery.evidenceURL
+        }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let bytes: Data
+        do {
+            bytes = try encoder.encode(RegistryDocument.empty)
+            try ensureDirectory()
+            try writeDurably(bytes, to: registryURL)
+        } catch {
+            let recovery = RegistryRecovery(
+                kind: .writeFailed,
+                evidenceURL: evidenceURL ?? registryURL
+            )
+            throw PersistenceError.writeFailed(recovery)
+        }
+
+        knownRegistryBytes = bytes
+        self.loadResult = .ready(.empty)
+        return evidenceURL
+    }
+
+    private func remember(_ result: RegistryLoadResult, bytes: Data?) -> RegistryLoadResult {
+        loadResult = result
+        knownRegistryBytes = bytes
+        return result
+    }
+
+    private func decodeSchemaVersion(from data: Data) throws -> Int {
+        let object = try JSONSerialization.jsonObject(with: data)
+        guard let dictionary = object as? [String: Any],
+              let number = dictionary["schemaVersion"] as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID(),
+              number.doubleValue == Double(number.intValue) else {
+            throw RegistryValidationError.invalidSchemaVersion
+        }
+        return number.intValue
+    }
+
+    private func quarantineCorruptRegistry() -> URL {
+        (try? quarantineRegistry(prefix: "registry.corrupt")) ?? registryURL
+    }
+
+    private func quarantineRegistry(prefix: String) throws -> URL {
+        let suffix = "\(Int(Date().timeIntervalSince1970 * 1_000))-\(UUID().uuidString)"
+        let quarantineURL = directoryURL.appendingPathComponent("\(prefix)-\(suffix).json")
+        guard rename(registryURL.path, quarantineURL.path) == 0 else {
+            throw POSIXFailure(code: errno)
+        }
+        return quarantineURL
+    }
+
+    private func ensureDirectory() throws {
+        try FileManager.default.createDirectory(
+            at: directoryURL,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        guard chmod(directoryURL.path, 0o700) == 0 else {
+            throw POSIXFailure(code: errno)
+        }
+    }
+
+    /// L6 CHAIN: 同目录临时文件 → 完整写入 → fsync 文件 → rename → fsync 目录。
+    /// 审计文件接通时必须复用本函数，不得另建写路径。
+    private func writeDurably(_ data: Data, to destinationURL: URL) throws {
+        let temporaryURL = directoryURL.appendingPathComponent(
+            ".\(destinationURL.lastPathComponent).\(UUID().uuidString).tmp"
+        )
+        var descriptor = open(temporaryURL.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        guard descriptor >= 0 else {
+            throw POSIXFailure(code: errno)
+        }
+        defer {
+            if descriptor >= 0 {
+                close(descriptor)
+            }
+            unlink(temporaryURL.path)
+        }
+        guard fchmod(descriptor, 0o600) == 0 else {
+            throw POSIXFailure(code: errno)
+        }
+
+        try data.withUnsafeBytes { rawBuffer in
+            guard var address = rawBuffer.baseAddress else { return }
+            var remaining = rawBuffer.count
+            while remaining > 0 {
+                let written = Darwin.write(descriptor, address, remaining)
+                if written < 0 && errno == EINTR {
+                    continue
+                }
+                guard written > 0 else {
+                    throw POSIXFailure(code: errno)
+                }
+                remaining -= written
+                address = address.advanced(by: written)
+            }
+        }
+
+        guard fsync(descriptor) == 0 else {
+            throw POSIXFailure(code: errno)
+        }
+        guard close(descriptor) == 0 else {
+            throw POSIXFailure(code: errno)
+        }
+        descriptor = -1
+
+        try beforeAtomicReplace()
+        guard rename(temporaryURL.path, destinationURL.path) == 0 else {
+            throw POSIXFailure(code: errno)
+        }
+
+        let directoryDescriptor = open(directoryURL.path, O_RDONLY)
+        guard directoryDescriptor >= 0 else {
+            throw POSIXFailure(code: errno)
+        }
+        defer { close(directoryDescriptor) }
+        guard fsync(directoryDescriptor) == 0 else {
+            throw POSIXFailure(code: errno)
+        }
+    }
+}
+
+private struct POSIXFailure: Error {
+    let code: Int32
+}

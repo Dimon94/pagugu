@@ -11,7 +11,7 @@ Status: runnable baseline
 - 技术栈：原生 Xcode macOS App、SwiftUI、Swift 6、macOS 14+。
 - 运行入口：`Pagugu/App/PaguguApp.swift`；稳定本地入口为 `script/build_and_run.sh`。
 - 分发：本地构建；App Sandbox 关闭。签名、公证和 GitHub Releases 尚未实现。
-- 持久状态：当前应用不读写持久状态。规划中的 App Registry 尚未实现。
+- 持久状态：Persistence actor 读写 `~/Library/Application Support/com.dimon.pagugu/registry.json`。当前仅接通加载、受限恢复与重置；三类主张的业务写入方由后续票接通。
 - 外部系统：当前运行时无外部系统。公开 GitHub 仓库已创建并用于 Issues；本地仓库尚未配置 remote 或推送代码，远程默认分支和 Actions 运行均不存在。
 
 ## 当前链路
@@ -20,6 +20,8 @@ Status: runnable baseline
       -> script/build_and_run.sh
       -> xcodebuild
       -> Pagugu.app
+      -> Persistence.loadRegistry
+      -> 正常态继续 / 受限恢复全窗口阻断
       -> WindowGroup + MenuBarExtra
       -> ContentView / MenuBarView
 
@@ -33,7 +35,8 @@ Status: runnable baseline
 | AppIdentity | 产品展示名、Bundle ID、主窗口 ID | 用户配置 | 静态常量 | Swift 标准库 | `PaguguTests.testProductIdentity` |
 | Discovery | Discovery Scan：遍历 Scan Root、软链接解析、Canonical Path 去重防环、SKILL.md 解析校验、Scan Issue | 身份归因（归 Identity）、Git 子进程 | `Discovery.scanPersonalRoots(_:)`、`Discovery.scanProjectRoot(_:)` | Foundation | `PaguguTests/DiscoveryTests.swift` |
 | Identity | Skill Source Key 规范化、HostAttribution 归因表、按 Skill Identity 聚合 Installation（全部纯函数） | 文件系统遍历、Git 调用、任何副作用 | `SkillSourceKey.normalize(remoteURL:)`、`HostAttribution.hosts(for:)`、`SkillDirectory.entries(from:)` | Foundation | `PaguguTests/IdentityTests.swift` |
-| AppModel | @MainActor composition root：Skill Read Model 只读投影、UI intent 唯一入口、启动与刷新流水线编排 | 直接 Git/文件系统/持久 IO、业务规则重建 | `AppModel.start()`、`AppModel.rescan()` | Discovery、Identity | `PaguguTests/AppModelTests.swift` |
+| Persistence | registry.json 的物理 IO、v1 持久记录类型、兼容分发、双 fsync 原子写、quarantine、外部修改检测 | 三类主张与审计记录的业务语义、Git/Discovery/Eligibility | `loadRegistry()`、`saveRegistry(_:)`、`resetRegistry(confirmed:)` | Foundation、Darwin | `PaguguTests/PersistenceTests.swift` |
+| AppModel | @MainActor composition root：Skill Read Model 与受限恢复投影、UI intent 唯一入口、启动与刷新流水线编排 | 直接 Git/文件系统/持久 IO、业务规则重建 | `AppModel.start()`、`AppModel.rescan()`、`AppModel.resetRegistry(confirmed:)` | Persistence、Discovery、Identity | `PaguguTests/AppModelTests.swift` |
 | build_and_run.sh | kill、build、launch、进程验证 | 签名、公证、发布 | `run|--debug|--logs|--telemetry|--verify` | `xcodebuild`、macOS CLI | `--verify` |
 
 ## 产品不变量
@@ -53,10 +56,9 @@ Status: runnable baseline
 
 ## 明确未实现
 
-- Project Scan Root 管理与持久化（#18 后续票）。
+- Project Scan Root 管理、护栏校验与 Registry 主张写入（#18 后续票；v1 物理字段已存在）。
 - `SKILL.md` frontmatter 的完整 Agent Skills 规范校验（name/description 字段违规标注）。
 - Git 状态裁决、检查、更新与审计（#19–#26 后续票）。
-- App Registry JSON。
 - 审计证据（Audit Evidence）持久集合。
 - Logo、签名、公证与发布。
 
