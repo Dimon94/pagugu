@@ -561,12 +561,22 @@ final class UpdateRunner: Sendable {
         } catch is CancellationError {
             throw await recordFailure(.interruptedUnknown, plan: plan)
         } catch let error as GitCommandError {
-            let reason = error.indicatesLockBusy
-                ? UpdateRunFailureReason.lockBusy
-                : await reasonAfterFastForwardFailure(plan)
-            throw await recordFailure(reason, plan: plan)
+            guard !error.indicatesLockBusy else {
+                throw await recordFailure(.lockBusy, plan: plan)
+            }
+            let classification = await classificationAfterFastForwardFailure(plan)
+            throw await recordFailure(
+                classification.reason,
+                blockingState: classification.blockingState,
+                plan: plan
+            )
         } catch {
-            throw await recordFailure(await reasonAfterFastForwardFailure(plan), plan: plan)
+            let classification = await classificationAfterFastForwardFailure(plan)
+            throw await recordFailure(
+                classification.reason,
+                blockingState: classification.blockingState,
+                plan: plan
+            )
         }
         let postFacts = await gitInspector.inspectCheckout(
             at: plan.checkoutCanonicalPath,
@@ -597,24 +607,33 @@ final class UpdateRunner: Sendable {
         }
     }
 
-    private func reasonAfterFastForwardFailure(_ plan: UpdatePlan) async -> UpdateRunFailureReason {
+    private func classificationAfterFastForwardFailure(
+        _ plan: UpdatePlan
+    ) async -> (reason: UpdateRunFailureReason, blockingState: CheckoutGitState?) {
         let currentFacts = await gitInspector.inspectCheckout(
             at: plan.checkoutCanonicalPath,
             scope: .afterSuccessfulCheck
         )
         if case .notAWorkTree = currentFacts.inspectionFailure {
-            return .identityChanged
+            return (.identityChanged, nil)
         }
         guard CheckoutEligibility.identityDigest(
             facts: currentFacts,
             sourceKey: plan.sourceKey
         ) == plan.identityDigest else {
-            return currentFacts.inspectionFailure == nil ? .identityChanged : .commandFailure
+            let reason: UpdateRunFailureReason = currentFacts.inspectionFailure == nil
+                ? .identityChanged
+                : .commandFailure
+            return (reason, nil)
         }
         if case .diverged = currentFacts.relativePosition {
-            return .fastForwardRejected
+            return (.fastForwardRejected, nil)
         }
-        return .commandFailure
+        let state = CheckoutEligibility.evaluate(facts: currentFacts, sourceKey: plan.sourceKey)
+        if state == .dirty {
+            return (.preconditionChanged, state)
+        }
+        return (.commandFailure, nil)
     }
 
     private func recordFailure(
