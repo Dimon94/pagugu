@@ -135,7 +135,7 @@ final class AppModel: ObservableObject {
         auditHistory = await audit.history()
     }
 
-    private func publishDiscovery(successfulUpdateFacts: CheckoutGitFacts? = nil) async {
+    private func publishDiscovery(updateRunFacts: CheckoutGitFacts? = nil) async {
         let projectScanRoots = await registry.projectScanRoots()
         let scanResult = Discovery.scanAll(
             personalRoots: personalRoots,
@@ -155,23 +155,23 @@ final class AppModel: ObservableObject {
             gitFactsByCheckoutPath: factsByCheckoutPath,
             mappings: mappings
         )
-        if let successfulUpdateFacts,
+        if let updateRunFacts,
            let source = contents.sources.first(where: { source in
-               source.checkouts.contains { $0.canonicalPath == successfulUpdateFacts.checkoutPath }
+               source.checkouts.contains { $0.canonicalPath == updateRunFacts.checkoutPath }
            }),
-           let currentFacts = factsByCheckoutPath[successfulUpdateFacts.checkoutPath],
-           let successfulIdentity = CheckoutEligibility.identityDigest(
-               facts: successfulUpdateFacts,
+           let currentFacts = factsByCheckoutPath[updateRunFacts.checkoutPath],
+           let updateIdentity = CheckoutEligibility.identityDigest(
+               facts: updateRunFacts,
                sourceKey: source.id
            ),
-           CheckoutEligibility.identityDigest(facts: currentFacts, sourceKey: source.id) == successfulIdentity,
-           currentFacts.head == successfulUpdateFacts.head,
-           currentFacts.upstream?.sha == successfulUpdateFacts.upstream?.sha,
-           currentFacts.dirty == successfulUpdateFacts.dirty,
-           currentFacts.siblingBranchConflict == successfulUpdateFacts.siblingBranchConflict,
+           CheckoutEligibility.identityDigest(facts: currentFacts, sourceKey: source.id) == updateIdentity,
+           currentFacts.head == updateRunFacts.head,
+           currentFacts.upstream?.sha == updateRunFacts.upstream?.sha,
+           currentFacts.dirty == updateRunFacts.dirty,
+           currentFacts.siblingBranchConflict == updateRunFacts.siblingBranchConflict,
            currentFacts.inspectionFailure == nil {
-            // Update Run 的 post-verify 是本次刷新的一次性事实证据；不写 Observation，也不跨刷新保留。
-            factsByCheckoutPath[successfulUpdateFacts.checkoutPath] = successfulUpdateFacts
+            // Update Run 的重查或 post-verify 是本次刷新一次性事实；不写 Observation，也不跨刷新保留。
+            factsByCheckoutPath[updateRunFacts.checkoutPath] = updateRunFacts
         }
         let observations = await registry.checkoutObservations().filter { checkoutPath, _ in
             !checkoutPathsRequiringCheckAfterCancellation.contains(checkoutPath)
@@ -348,9 +348,11 @@ final class AppModel: ObservableObject {
     }
 
     // L4 IN: Skill Identity 与 checkoutPath 必须来自当前完整 Read Model 的 Eligible 候选。
-    // OUT: 发布 pendingUpdatePlan，或 noop/既有阻断态结果；选择不持久化。
-    // FAIL: stale intent 抛合同错误；运行失败发布稳定 UpdateRunFailure，且不保留计划。
-    // TEST: repo://PaguguTests/AppModelTests.swift（候选、计划事实、noop/刷新链路）。
+    // OUT: 重查 noop/阻断先发布事实刷新，再发布结果；ready 发布 pendingUpdatePlan。选择不持久化。
+    // FAIL: stale intent 抛合同错误；运行失败发布稳定 UpdateRunFailure，并按实时事实刷新投影。
+    // TEST: repo://PaguguTests/AppModelTests.swift（候选、计划事实、noop/阻断/失败刷新链路）。
+    // L6 CHAIN: Runs fetch 重查 → ready 等待确认；或 noop/阻断重读事实 → 完整 Discovery 发布 → 释放互斥。
+    //             重查失败 → 结果发布 → 完整 Discovery；旧观察仅按 canonical freshness 合同失效。
     func prepareUpdate(skillIdentity: SkillIdentity, checkoutPath: String) async throws {
         guard activeRun == nil else { throw UpdateRunContractError.runInProgress }
         guard eligibleUpdateCheckoutPaths(for: skillIdentity).contains(checkoutPath),
@@ -384,9 +386,19 @@ final class AppModel: ObservableObject {
                 pendingUpdatePlan = plan
                 activeRun = .updateAwaitingConfirmation
             case .upToDate:
+                let recheckedFacts = await gitInspector.inspectCheckout(
+                    at: checkoutPath,
+                    scope: .afterSuccessfulCheck
+                )
+                await publishDiscovery(updateRunFacts: recheckedFacts)
                 updateResult = .upToDate
                 activeRun = nil
             case .blocked(let state):
+                let recheckedFacts = await gitInspector.inspectCheckout(
+                    at: checkoutPath,
+                    scope: .afterSuccessfulCheck
+                )
+                await publishDiscovery(updateRunFacts: recheckedFacts)
                 updateResult = .failed(UpdateRunFailure(
                     reason: .preconditionChanged,
                     blockingState: state
@@ -396,9 +408,11 @@ final class AppModel: ObservableObject {
         } catch let failure as UpdateRunFailure {
             pendingUpdatePlan = nil
             updateResult = .failed(failure)
+            await publishDiscovery()
             activeRun = nil
         } catch {
             pendingUpdatePlan = nil
+            await publishDiscovery()
             activeRun = nil
             throw error
         }
@@ -407,8 +421,9 @@ final class AppModel: ObservableObject {
     // L4 IN: pendingUpdatePlan 必须仍是用户当前确认的冻结计划。
     // OUT: 首次 await 前原子转入 executing 并清除可取消 plan；成功结果先发布，再以
     //      post-verify 一次性事实执行完整 Discovery 刷新；刷新失败独立投影。
-    // FAIL: 运行失败发布稳定 UpdateRunFailure 并清空计划；不重试、不回滚。
-    // TEST: repo://PaguguTests/AppModelTests.swift（成功、旧 Observation、刷新失败隔离）。
+    // FAIL: 运行失败发布稳定 UpdateRunFailure，并按实时事实刷新投影；不重试、不回滚。
+    // TEST: repo://PaguguTests/AppModelTests.swift（成功、失败后旧 Observation、刷新失败隔离）。
+    // L6 CHAIN: 成功发布 post-verify 事实；执行失败发布结果后完整 Discovery，旧观察仅按 freshness 失效。
     func confirmUpdate() async throws {
         guard activeRun == .updateAwaitingConfirmation else {
             throw activeRun == nil ? UpdateRunContractError.invalidRequest : .runInProgress
@@ -432,7 +447,7 @@ final class AppModel: ObservableObject {
                 checkoutPath: success.plan.checkoutCanonicalPath,
                 targetSHA: success.plan.targetSHA
             )
-            await publishDiscovery(successfulUpdateFacts: success.postVerificationFacts)
+            await publishDiscovery(updateRunFacts: success.postVerificationFacts)
             switch readModel.scanOutcome {
             case .complete:
                 updateRefreshFailure = nil
@@ -452,9 +467,11 @@ final class AppModel: ObservableObject {
             pendingUpdatePlan = nil
             updateResult = .failed(failure)
             auditHistory = await audit.history()
+            await publishDiscovery()
             activeRun = nil
         } catch {
             pendingUpdatePlan = nil
+            await publishDiscovery()
             activeRun = nil
             throw error
         }

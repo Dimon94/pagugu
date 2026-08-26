@@ -13,6 +13,11 @@ final class AppModelTests: XCTestCase {
         case failed
     }
 
+    private enum TestGitFailure: Error {
+        case fetch
+        case fastForward
+    }
+
     private struct UnclassifiedFailingRegistryResetter: RegistryResetting {
         func reset(confirmed _: Bool) async throws -> URL? {
             throw TestUnclassifiedResetFailure.failed
@@ -1117,6 +1122,100 @@ final class AppModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPrepareUpdateNoopPublishesRecheckedFactsAndInvalidatesOldObservation() async throws {
+        let head = String(repeating: "1", count: 40)
+        let fixture = try await makeObservedUpdateFixture(
+            name: "noop-update",
+            headSHA: head,
+            observedTipSHA: String(repeating: "2", count: 40),
+            preparedTipSHA: head,
+            preparedPosition: .upToDate
+        )
+        let (model, source, selected, checkoutPath) = fixture
+        XCTAssertEqual(model.readModel.checkoutCards(for: source.id).first?.state, .updateAvailable)
+
+        try await model.prepareUpdate(skillIdentity: selected, checkoutPath: checkoutPath)
+
+        XCTAssertEqual(model.updateResult, .upToDate)
+        XCTAssertNil(model.pendingUpdatePlan)
+        let refreshedCard = try XCTUnwrap(model.readModel.checkoutCards(for: source.id).first)
+        XCTAssertEqual(refreshedCard.state, .upToDate, "重查 noop 后卡片不得保留入口时刻的可更新状态")
+        XCTAssertNil(refreshedCard.observation, "fetch 改变 remote-tracking tip 后旧观察必须按 freshness 失效")
+        XCTAssertTrue(model.eligibleUpdateCheckoutPaths(for: selected).isEmpty)
+    }
+
+    @MainActor
+    func testPrepareUpdateFailureInvalidatesEntranceObservation() async throws {
+        let fixture = try await makeObservedUpdateFixture(
+            name: "failed-prepare",
+            headSHA: String(repeating: "3", count: 40),
+            observedTipSHA: String(repeating: "4", count: 40),
+            preparedTipSHA: String(repeating: "9", count: 40),
+            failFetch: true
+        )
+        let (model, source, selected, checkoutPath) = fixture
+        XCTAssertEqual(model.readModel.checkoutCards(for: source.id).first?.state, .updateAvailable)
+
+        try await model.prepareUpdate(skillIdentity: selected, checkoutPath: checkoutPath)
+
+        XCTAssertEqual(model.updateResult, .failed(UpdateRunFailure(reason: .fetchFailure)))
+        let refreshedCard = try XCTUnwrap(model.readModel.checkoutCards(for: source.id).first)
+        XCTAssertEqual(refreshedCard.state, .checkUnknown)
+        XCTAssertNil(refreshedCard.observation)
+        XCTAssertTrue(model.eligibleUpdateCheckoutPaths(for: selected).isEmpty)
+
+        await model.rescan()
+        XCTAssertEqual(model.readModel.checkoutCards(for: source.id).first?.state, .checkUnknown)
+        XCTAssertTrue(model.eligibleUpdateCheckoutPaths(for: selected).isEmpty)
+    }
+
+    @MainActor
+    func testPrepareUpdateBlockedPublishesBlockingStateAndRecovery() async throws {
+        let fixture = try await makeObservedUpdateFixture(
+            name: "blocked-prepare",
+            headSHA: String(repeating: "5", count: 40),
+            observedTipSHA: String(repeating: "6", count: 40),
+            preparedPosition: .diverged(ahead: 1, behind: 1)
+        )
+        let (model, source, selected, checkoutPath) = fixture
+
+        try await model.prepareUpdate(skillIdentity: selected, checkoutPath: checkoutPath)
+
+        let failure = UpdateRunFailure(reason: .preconditionChanged, blockingState: .diverged)
+        XCTAssertEqual(model.updateResult, .failed(failure))
+        XCTAssertEqual(failure.recoveryDirection, CheckoutGitState.diverged.recoveryDirection)
+        let refreshedCard = try XCTUnwrap(model.readModel.checkoutCards(for: source.id).first)
+        XCTAssertEqual(refreshedCard.state, .diverged)
+        XCTAssertTrue(model.eligibleUpdateCheckoutPaths(for: selected).isEmpty)
+    }
+
+    @MainActor
+    func testConfirmUpdateFailureInvalidatesEntranceObservation() async throws {
+        let fixture = try await makeObservedUpdateFixture(
+            name: "failed-confirm",
+            headSHA: String(repeating: "7", count: 40),
+            observedTipSHA: String(repeating: "8", count: 40),
+            preparedTipSHA: String(repeating: "9", count: 40),
+            failFastForward: true
+        )
+        let (model, source, selected, checkoutPath) = fixture
+        try await model.prepareUpdate(skillIdentity: selected, checkoutPath: checkoutPath)
+        XCTAssertNotNil(model.pendingUpdatePlan)
+
+        try await model.confirmUpdate()
+
+        XCTAssertEqual(model.updateResult, .failed(UpdateRunFailure(reason: .commandFailure)))
+        let refreshedCard = try XCTUnwrap(model.readModel.checkoutCards(for: source.id).first)
+        XCTAssertEqual(refreshedCard.state, .checkUnknown)
+        XCTAssertNil(refreshedCard.observation)
+        XCTAssertTrue(model.eligibleUpdateCheckoutPaths(for: selected).isEmpty)
+
+        await model.rescan()
+        XCTAssertEqual(model.readModel.checkoutCards(for: source.id).first?.state, .checkUnknown)
+        XCTAssertTrue(model.eligibleUpdateCheckoutPaths(for: selected).isEmpty)
+    }
+
+    @MainActor
     func testCancelUpdateIgnoresFreshObservationUntilNewCheckAndWritesCancelledAudit() async throws {
         let repo = tmp.appendingPathComponent("cancel-update-repo")
         try makeWorkTree(at: repo)
@@ -1497,6 +1596,97 @@ final class AppModelTests: XCTestCase {
         }
     }
 
+    @MainActor
+    private func makeObservedUpdateFixture(
+        name: String,
+        headSHA: String,
+        observedTipSHA: String,
+        preparedTipSHA: String? = nil,
+        preparedPosition: GitRelativePosition = .behindOnly(1),
+        failFetch: Bool = false,
+        failFastForward: Bool = false
+    ) async throws -> (
+        model: AppModel,
+        source: SkillSourceItem,
+        selected: SkillIdentity,
+        checkoutPath: String
+    ) {
+        let repo = tmp.appendingPathComponent("\(name)-repo")
+        try makeWorkTree(at: repo)
+        try writeSkill(at: repo.appendingPathComponent("skills/one"), name: "One")
+        let remoteURL = "https://example.com/team/\(name).git"
+        let sourceKey = SkillSourceKey.remoteURL("example.com/team/\(name)")
+        let localFacts = updateFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            headSHA: headSHA,
+            remoteTipSHA: observedTipSHA,
+            relativePosition: .unknown
+        )
+        let checkedFacts = updateFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            headSHA: headSHA,
+            remoteTipSHA: observedTipSHA,
+            relativePosition: .behindOnly(1)
+        )
+        let currentTipSHA = preparedTipSHA ?? observedTipSHA
+        let preparedLocalFacts = updateFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            headSHA: headSHA,
+            remoteTipSHA: currentTipSHA,
+            relativePosition: .unknown
+        )
+        let preparedFacts = updateFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            headSHA: headSHA,
+            remoteTipSHA: currentTipSHA,
+            relativePosition: preparedPosition
+        )
+        let dataDirectory = tmp.appendingPathComponent("\(name)-data")
+        let persistence = Persistence(directoryURL: dataDirectory)
+        _ = await persistence.loadRegistry()
+        let digest = try XCTUnwrap(CheckoutEligibility.identityDigest(
+            facts: localFacts,
+            sourceKey: sourceKey
+        ))
+        try await persistence.saveRegistry(RegistryDocument(
+            schemaVersion: RegistryDocument.currentSchemaVersion,
+            projectScanRoots: [],
+            sourceMappings: [:],
+            checkoutObservations: [
+                repo.path: CheckoutObservation(
+                    result: .success,
+                    completedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                    remoteTipSHA: observedTipSHA,
+                    identityDigest: digest
+                ),
+            ]
+        ))
+        let git = FakeUpdateGitClient(
+            localFacts: localFacts,
+            checkedFacts: checkedFacts,
+            preparedLocalFacts: preparedLocalFacts,
+            preparedFacts: preparedFacts,
+            updatedLocalFacts: preparedLocalFacts,
+            updatedFacts: preparedFacts,
+            failFetch: failFetch,
+            failFastForward: failFastForward
+        )
+        let model = AppModel(
+            personalRoots: [repo.path],
+            persistence: Persistence(directoryURL: dataDirectory),
+            gitInspector: git,
+            gitExecutor: git
+        )
+        await model.start()
+        let source = try XCTUnwrap(model.readModel.sources.first)
+        let selected = try XCTUnwrap(source.skills.first?.id)
+        return (model, source, selected, repo.path)
+    }
+
     private func updateFacts(
         path: String,
         remoteURL: String,
@@ -1535,6 +1725,8 @@ final class AppModelTests: XCTestCase {
         private(set) var localInspectionsAfterFastForward = 0
         let removePathOnFastForward: URL?
         let blockFastForward: Bool
+        let failFetch: Bool
+        let failFastForward: Bool
         private var fastForwardStarted = false
         private var fastForwardStartWaiter: CheckedContinuation<Void, Never>?
         private var fastForwardFinishWaiter: CheckedContinuation<Void, Never>?
@@ -1547,7 +1739,9 @@ final class AppModelTests: XCTestCase {
             updatedLocalFacts: CheckoutGitFacts,
             updatedFacts: CheckoutGitFacts,
             removePathOnFastForward: URL? = nil,
-            blockFastForward: Bool = false
+            blockFastForward: Bool = false,
+            failFetch: Bool = false,
+            failFastForward: Bool = false
         ) {
             self.localFacts = localFacts
             self.checkedFacts = checkedFacts
@@ -1557,6 +1751,8 @@ final class AppModelTests: XCTestCase {
             self.updatedFacts = updatedFacts
             self.removePathOnFastForward = removePathOnFastForward
             self.blockFastForward = blockFastForward
+            self.failFetch = failFetch
+            self.failFastForward = failFastForward
         }
 
         func waitUntilFastForwardStarts() async {
@@ -1571,9 +1767,11 @@ final class AppModelTests: XCTestCase {
 
         func fetch(remote: String, upstreamRef: String, at checkoutPath: String) async throws {
             fetchCount += 1
+            if failFetch { throw TestGitFailure.fetch }
         }
 
         func fastForward(to targetSHA: String, at checkoutPath: String) async throws {
+            if failFastForward { throw TestGitFailure.fastForward }
             fastForwardStarted = true
             fastForwardStartWaiter?.resume()
             fastForwardStartWaiter = nil
