@@ -18,7 +18,7 @@ Status: frozen（Dimon94/pagugu#11 HITL 冻结，2026-08-24）
 
 **S6 noop**：重查时已最新 → 不弹确认，横幅告知。
 
-**S7 取消**：确认页取消 → 横幅说明后果（检出回「尚未检查」，重新检查恢复）+ 审计 cancelled 记录。
+**S7 取消**：确认页取消 → 即使旧 Checkout Observation 仍满足 freshness，检出也回「尚未检查」；横幅说明需重新检查才能恢复 + 审计 cancelled 记录。
 
 **S8 失败恢复**：失败弹窗 = 失败类中文名 + 一句人工恢复方向；零自动重试、零自动回滚；tip-changed 提示重新发起即可。
 

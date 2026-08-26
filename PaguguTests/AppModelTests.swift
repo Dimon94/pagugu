@@ -1054,7 +1054,7 @@ final class AppModelTests: XCTestCase {
     }
 
     @MainActor
-    func testCancelUpdateReleasesMutexRefreshesToCheckUnknownAndWritesCancelledAudit() async throws {
+    func testCancelUpdateIgnoresFreshObservationUntilNewCheckAndWritesCancelledAudit() async throws {
         let repo = tmp.appendingPathComponent("cancel-update-repo")
         try makeWorkTree(at: repo)
         try writeSkill(at: repo.appendingPathComponent("skills/one"), name: "One")
@@ -1062,7 +1062,6 @@ final class AppModelTests: XCTestCase {
         let sourceKey = SkillSourceKey.remoteURL("example.com/team/cancel-update")
         let oldHead = String(repeating: "1", count: 40)
         let observedTip = String(repeating: "2", count: 40)
-        let preparedTip = String(repeating: "3", count: 40)
         let localFacts = updateFacts(
             path: repo.path,
             remoteURL: remoteURL,
@@ -1077,20 +1076,8 @@ final class AppModelTests: XCTestCase {
             remoteTipSHA: observedTip,
             relativePosition: .behindOnly(1)
         )
-        let preparedLocalFacts = updateFacts(
-            path: repo.path,
-            remoteURL: remoteURL,
-            headSHA: oldHead,
-            remoteTipSHA: preparedTip,
-            relativePosition: .unknown
-        )
-        let preparedFacts = updateFacts(
-            path: repo.path,
-            remoteURL: remoteURL,
-            headSHA: oldHead,
-            remoteTipSHA: preparedTip,
-            relativePosition: .behindOnly(2)
-        )
+        let preparedLocalFacts = localFacts
+        let preparedFacts = checkedFacts
         let dataDirectory = tmp.appendingPathComponent("cancel-update-data")
         let persistence = Persistence(directoryURL: dataDirectory)
         _ = await persistence.loadRegistry()
@@ -1149,12 +1136,19 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.updateResult, .cancelled(checkoutPath: repo.path))
         XCTAssertTrue(UpdateResult.cancellationConsequence.contains("尚未检查"))
         XCTAssertTrue(UpdateResult.cancellationConsequence.contains("重新检查"))
-        let card = try XCTUnwrap(model.readModel.checkoutCards(for: source.id).first)
-        XCTAssertEqual(card.state, .checkUnknown)
-        let audit = await Persistence(directoryURL: dataDirectory).loadAuditEvidence()
-        XCTAssertEqual(audit.records.count, 1)
-        XCTAssertEqual(audit.records.first?.updateRunID, plan.runID)
-        XCTAssertEqual(audit.records.first?.outcome, .cancelled)
+        var card = try XCTUnwrap(model.readModel.checkoutCards(for: source.id).first)
+        XCTAssertEqual(card.state, .checkUnknown, "旧观察仍 fresh 时，取消也必须回到尚未检查")
+        let auditAfterCancellation = await Persistence(directoryURL: dataDirectory).loadAuditEvidence()
+        XCTAssertEqual(auditAfterCancellation.records.count, 1)
+        XCTAssertEqual(auditAfterCancellation.records.first?.updateRunID, plan.runID)
+        XCTAssertEqual(auditAfterCancellation.records.first?.outcome, .cancelled)
+
+        await model.rescan()
+        card = try XCTUnwrap(model.readModel.checkoutCards(for: source.id).first)
+        XCTAssertEqual(card.state, .checkUnknown, "重新扫描不得恢复取消前的可更新状态")
+        await model.checkNow()
+        card = try XCTUnwrap(model.readModel.checkoutCards(for: source.id).first)
+        XCTAssertEqual(card.state, .updateAvailable, "新的成功检查才恢复更新判断")
     }
 
     @MainActor

@@ -22,7 +22,7 @@ Git 行为事实已在一次性 scratch 仓库实测（git 2.52.0，命令可复
 
 点击更新后：① fetch 目标检出的 upstream 分支；② 重读目标检出身份摘要与全部 Git Fact，按 ADR-0004 同一合同重新裁决（不重跑 Discovery Scan，L0–L2 以入口时刻为准）；③ 仅当重查为 update-available 才弹出确认，确认绑定重查快照中的精确 target SHA；④ 确认后执行前做最后一次轻量比对（HEAD、身份摘要、remote tip 未漂移），任何漂移 fail closed 回到重查；⑤ ff-only 应用到该精确 SHA；⑥ post-verify；⑦ 刷新。确认永不超时自动执行。被否决：先确认后重查——确认绑定陈旧观察，tip 变化时仍需二次确认，确认不再反映真实执行计划。
 
-已接受的代价：确认前的 fetch 会移动 remote-tracking ref；若 tip 恰在此前变化，用户取消确认后该检出按 freshness 合同（ADR-0005 §7）回落 check-unknown，恢复动作是重新检查。这是诚实呈现真实远端变化，不是状态丢失。
+已接受的代价：确认前的 fetch 会移动 remote-tracking ref。用户取消确认后，无论 tip 是否变化，即使旧 Checkout Observation 仍满足 freshness，该检出也必须回落 check-unknown；旧观察不得继续支撑 update-available。恢复动作是重新检查。取消不改写或删除 Registry 中的观察槽；AppModel 在本次 App 会话新的成功检查前不消费该检出的旧观察。
 
 ### 3. 重查状态映射
 
@@ -94,7 +94,7 @@ Update Run 退出即中断，尽力终止进行中的 Git 子进程。重启后�
 
 ### 负面 / 成本
 
-- 确认前 fetch 可能使旧观察失效：取消后检出回 check-unknown，需一次重新检查（可解释、fail closed）。
+- 取消确认后检出无条件回 check-unknown；即使旧观察仍满足 freshness，也需一次重新检查才恢复更新判断（可解释、fail closed）。
 - 零自动重试把瞬时网络抖动留给用户重新发起。
 - 成功后完整 Discovery Scan 比局部重读贵；本地操作，成本可接受。
 - post-merge hook 被屏蔽：依赖该 hook 的工作流在 Pagugu 发起的更新中不触发；是否需要记录归审计证据 follow-up 票。

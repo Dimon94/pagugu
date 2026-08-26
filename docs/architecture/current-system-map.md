@@ -34,7 +34,7 @@ Status: runnable discovery、全量手动 Check Run、freshness 重推导、安�
       -> AppModel 获取 App 级单一 run 互斥；Check/Update 入口同步禁用并解释
       -> Runs fetch 重查 → ready/noop/blocked；确认前阻断或失败写 terminal-only failed
       -> ready UpdatePlan 冻结身份、精确 SHA 与目标检出 Skill 成员清单
-      -> cancel 写 terminal-only cancelled → 完整事实刷新 → 释放互斥
+      -> cancel 标记目标检出需重新检查 + 写 terminal-only cancelled → 忽略 fresh 旧观察并刷新为 check-unknown → 释放互斥
       -> confirm 写审计 start → 漂移比对 → ff-only 精确 SHA → post-verify → success/failed terminal
       -> 九类失败立即停止，不自动重试、不自动回滚；AppModel 发布中文失败类与恢复方向
       -> 成功时 AppModel 保留结果 → 完整 Discovery 刷新；post-verify facts 仅作为该次刷新一次性证据
@@ -59,7 +59,7 @@ Status: runnable discovery、全量手动 Check Run、freshness 重推导、安�
 | Persistence | registry.json 与 audit-history.json 的唯一物理 IO、v1 持久记录、双 fsync 原子写、quarantine、Registry 外部修改检测；Update started/terminal 以 run ID 关联并校验 phase/outcome/payload 配对与规范化 reason code 形状 | 三类主张、失败九类与审计记录的业务语义、Git/Discovery/Eligibility | Registry load/save/reset、Audit load/append/clear | Foundation、Darwin | `PaguguTests/PersistenceTests.swift`、`RegistryTests.swift` |
 | Audit | 来源映射、Check Run terminal 与 Update Run started/success/cancelled/failed terminal 的窄 append 语义入口；写入/读取失败 fail-open；呈现投影派生（两段折叠、孤儿 interrupted-unknown、「历史不可用」） | 文件 IO、当前主张、恢复、执行许可 | `recordSourceMapping(...)`、`recordCheckRun(...)`、`recordUpdateStarted(...)`、`recordUpdateSucceeded(...)`、`recordUpdateCancelled(...)`、`recordUpdateFailed(...)`、`history()`、`clearHistory()`、`AuditPresentation.project(_:)` | Persistence、Foundation | `PaguguTests/RegistryTests.swift`、`CheckRunTests.swift`、`AppModelTests.swift` |
 | Runs | Check Run 编排；Update Run fetch 重查、精确计划、确认取消、漂移比对、ff-only、post-verify、九类失败归一化与 terminal 审计；run 瞬态 | Git/观察物理 IO、UI 投影、第二把互斥锁 | `CheckRunner.startCheck(scope:)`、`UpdateRunner.prepareUpdate(request:)`、`cancelPrepared(_:)`、`executeConfirmed(_:)` | Git、Eligibility、Registry、Audit | `PaguguTests/CheckRunTests.swift` |
-| AppModel | @MainActor composition root：启动/刷新、App 级单一 run 互斥（preparing / awaiting-confirmation / executing / cancelling）、Check/Update intent、取消/失败/禁用原因投影，按实时事实重推导 freshness，发布逐检出、映射、目录逐态短语与五档静默排序投影；审计历史投影与清空 intent、重置备份路径呈现 | 直接 Git/文件系统/持久 IO、Checkout Git State/映射有效性/执行规则重建 | 启动/重扫、`checkNow()`、Eligible 检出候选、`prepareUpdate(...)`、`confirmUpdate()`、`cancelUpdate()`、Project Scan Root/来源映射 CRUD、Registry reset、`clearAuditHistory(confirmed:)` | Registry、Audit、Discovery、Git、Identity、Eligibility、Runs | `PaguguTests/AppModelTests.swift` |
+| AppModel | @MainActor composition root：启动/刷新、App 级单一 run 互斥（preparing / awaiting-confirmation / executing / cancelling）、Check/Update intent、取消/失败/禁用原因投影，按实时事实重推导 freshness；确认页取消后在新的成功检查前忽略目标检出的旧观察并固定投影 check-unknown；发布逐检出、映射、目录逐态短语与五档静默排序投影；审计历史投影与清空 intent、重置备份路径呈现 | 直接 Git/文件系统/持久 IO、Checkout Git State/映射有效性/执行规则重建 | 启动/重扫、`checkNow()`、Eligible 检出候选、`prepareUpdate(...)`、`confirmUpdate()`、`cancelUpdate()`、Project Scan Root/来源映射 CRUD、Registry reset、`clearAuditHistory(confirmed:)` | Registry、Audit、Discovery、Git、Identity、Eligibility、Runs | `PaguguTests/AppModelTests.swift` |
 | build_and_run.sh | kill、build、launch、进程验证 | 签名、公证、发布 | `run|--debug|--logs|--telemetry|--verify` | `xcodebuild`、macOS CLI | `--verify` |
 
 ## 产品不变量

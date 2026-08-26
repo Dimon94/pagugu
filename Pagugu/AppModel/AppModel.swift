@@ -3,7 +3,8 @@ import Foundation
 // L3 COORD: Pagugu/AppModel/AppModel.swift
 // POS: AppModel 模块（ADR-0009 §7）。@MainActor composition root：
 //      owns Skill Read Model、受限恢复与来源映射错误投影、目录收起、Check/Update 瞬态、全部 UI intent
-//      与启动/刷新编排；每次发布按实时事实重推导观察 freshness。审计历史投影只服务「最近活动」呈现；
+//      与启动/刷新编排；每次发布按实时事实重推导观察 freshness。取消确认后，目标检出在新的成功检查前
+//      不再消费旧观察。审计历史投影只服务「最近活动」呈现；
 //      Registry reset 成功后呈现 quarantine 备份路径。does not own 直接 Git/文件系统/持久 IO
 //      （经 Git/Discovery/Registry/Audit/Runs seam）、
 //      业务规则重建。
@@ -34,7 +35,7 @@ enum AppRun: Equatable, Sendable {
 }
 
 enum UpdateResult: Equatable, Sendable {
-    static let cancellationConsequence = "已取消更新。若远端目标已变化，检出会回到“尚未检查”；重新检查后可恢复更新判断。"
+    static let cancellationConsequence = "已取消更新。该检出已回到“尚未检查”；重新检查后可恢复更新判断。"
 
     case success(checkoutPath: String, targetSHA: String)
     case upToDate
@@ -86,6 +87,8 @@ final class AppModel: ObservableObject {
     private var checkScope: [CheckRunTarget] = []
     private var checkRunTargetsByPath: [String: CheckRunTarget] = [:]
     private var checkItemOutcomes: [String: CheckRunItemOutcome] = [:]
+    /// 用户取消确认后，旧观察不能再次解锁可更新；新的成功检查才移除此瞬态约束。
+    private var checkoutPathsRequiringCheckAfterCancellation: Set<String> = []
 
     init(
         personalRoots: [String] = Discovery.personalSkillRoots,
@@ -158,7 +161,9 @@ final class AppModel: ObservableObject {
             // Update Run 的 post-verify 是本次刷新的一次性事实证据；不写 Observation，也不跨刷新保留。
             factsByCheckoutPath[successfulUpdateFacts.checkoutPath] = successfulUpdateFacts
         }
-        let observations = await registry.checkoutObservations()
+        let observations = await registry.checkoutObservations().filter { checkoutPath, _ in
+            !checkoutPathsRequiringCheckAfterCancellation.contains(checkoutPath)
+        }
         for source in contents.sources {
             for checkout in source.checkouts {
                 guard let observation = observations[checkout.canonicalPath],
@@ -303,6 +308,9 @@ final class AppModel: ObservableObject {
                 await publishDiscovery()
             case .item(let item, let progress):
                 checkItemOutcomes[item.checkoutPath] = item.outcome
+                if item.outcome == .success {
+                    checkoutPathsRequiringCheckAfterCancellation.remove(item.checkoutPath)
+                }
                 checkRunProgress = progress
                 await publishDiscovery()
             case .finished(let summary):
@@ -440,13 +448,17 @@ final class AppModel: ObservableObject {
         }
     }
 
-    // L6 CHAIN: 待确认 plan → 首次 await 前转入 cancelling 并清空 plan → terminal-only cancelled
-    //           审计 → 完整事实刷新 → 释放互斥。executing 阶段不可取消。
-    // 取消不写 start、不执行 Git；结果区使用 cancellationConsequence 说明恢复方向。
+    // L4 IN: 仅 awaiting-confirmation 且冻结 plan 存在时可取消。
+    // OUT: 发布 cancelled 结果与 terminal-only cancelled 审计，并把目标检出投影为 check-unknown。
+    // INVARIANT: executing 不可取消；即使旧观察仍 fresh，也不能继续支撑 update-available。
+    // TEST: repo://PaguguTests/AppModelTests.swift::testCancelUpdateIgnoresFreshObservationUntilNewCheckAndWritesCancelledAudit。
+    // L6 CHAIN: 待确认 plan → 首次 await 前转入 cancelling 并清空 plan → 标记目标检出需重新检查 →
+    //           terminal-only cancelled 审计 → 完整事实刷新为 check-unknown → 释放互斥。新的成功检查解除标记。
     func cancelUpdate() async {
         guard activeRun == .updateAwaitingConfirmation, let plan = pendingUpdatePlan else { return }
         activeRun = .updateCancelling
         pendingUpdatePlan = nil
+        checkoutPathsRequiringCheckAfterCancellation.insert(plan.checkoutCanonicalPath)
         let runner = UpdateRunner(
             gitInspector: gitInspector,
             gitExecutor: gitExecutor,
