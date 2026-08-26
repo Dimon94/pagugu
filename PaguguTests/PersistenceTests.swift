@@ -272,6 +272,51 @@ final class PersistenceTests: XCTestCase {
         XCTAssertEqual(reloaded, .ready(.empty))
     }
 
+    func testEveryStableUpdateFailureReasonIsValidAuditEvidence() async throws {
+        XCTAssertEqual(
+            AuditRecord.UpdateFailureReasonCode.allCases.map(\.rawValue),
+            UpdateRunFailureReason.allCases.map(\.rawValue),
+            "Persistence wire code 必须与 Runs 拥有的稳定失败类完全一致"
+        )
+        let persistence = Persistence(directoryURL: directoryURL)
+
+        for reason in UpdateRunFailureReason.allCases {
+            try await persistence.appendAuditEvidence(
+                updateFailureRecord(id: reason.rawValue, reasonCode: reason.rawValue)
+            )
+        }
+
+        let document = await persistence.loadAuditDocument()
+        XCTAssertEqual(
+            document?.records.compactMap(\.updateFailureReason),
+            UpdateRunFailureReason.allCases.map(\.rawValue)
+        )
+    }
+
+    // 错误实现会失败：只校验 kebab-case 会让未知 code 进入历史，随后 UI 无法把它
+    // 转为 UpdateRunFailureReason，并静默隐藏整段失败原因。
+    func testUnknownUpdateFailureReasonMakesAuditHistoryUnavailable() async throws {
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let auditURL = directoryURL.appendingPathComponent("audit-history.json")
+        let document = AuditDocument(
+            schemaVersion: AuditDocument.currentSchemaVersion,
+            records: [updateFailureRecord(id: "unknown", reasonCode: "not-a-reason")]
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(document).write(to: auditURL)
+
+        let loaded = await Persistence(directoryURL: directoryURL).loadAuditDocument()
+        let projection = AuditPresentation.project(loaded)
+
+        XCTAssertNil(loaded, "未知失败类必须走历史不可用，不能作为合法记录进入 UI")
+        XCTAssertTrue(projection.isUnavailable)
+        XCTAssertEqual(AuditHistoryProjection.unavailableMessage, "历史不可用")
+        XCTAssertFalse(fileManager.fileExists(atPath: auditURL.path))
+        let quarantined = try fileManager.contentsOfDirectory(atPath: directoryURL.path)
+        XCTAssertTrue(quarantined.contains { $0.hasPrefix("audit-history.corrupt-") })
+    }
+
     func testAuditV1KeepsPreActionSourceMappingRecordsReadable() async throws {
         try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         let json = #"{"schemaVersion":1,"records":[{"id":"legacy","recordedAt":"2026-08-25T00:00:00Z","outcome":"created","installationCanonicalPath":"/installation","target":{"skillSourceKey":"github.com/Owner/repo","repositoryRelativePath":"skills/example"}}]}"#
@@ -413,6 +458,26 @@ final class PersistenceTests: XCTestCase {
         XCTAssertEqual(audit.records.count, 200)
         XCTAssertEqual(audit.records.first?.id, "1")
         XCTAssertEqual(audit.records.last?.id, "200")
+    }
+
+    private func updateFailureRecord(id: String, reasonCode: String) -> AuditRecord {
+        AuditRecord(
+            id: id,
+            recordedAt: Date(timeIntervalSince1970: 1),
+            updateRunID: "run-\(id)",
+            phase: .terminal,
+            target: .init(
+                skillIdentity: .init(
+                    skillSourceKey: "github.com/Owner/repo",
+                    repositoryRelativePath: "skills/example"
+                ),
+                checkoutCanonicalPath: "/checkouts/repo",
+                branchName: "main",
+                upstreamRefName: "origin/main"
+            ),
+            outcome: .failed,
+            failureReason: reasonCode
+        )
     }
 
     private func document(scanRoot: String) -> RegistryDocument {

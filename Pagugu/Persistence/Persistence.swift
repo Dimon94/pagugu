@@ -8,7 +8,8 @@ import Foundation
 // TEST: repo://PaguguTests/PersistenceTests.swift、repo://PaguguTests/CheckRunTests.swift。
 
 // L5 PARAM: Registry/Audit schemaVersion 当前只接受 1；Audit FIFO 上限 200。
-// Audit action 为 source-mapping / check-run / update-run；Update start 无 outcome，terminal 使用 success/cancelled/failed。
+// Audit action 为 source-mapping / check-run / update-run；Update start 无 outcome，terminal 使用 success/cancelled/failed；
+// failed reason 只接受审计 schema 列出的九个稳定 wire code，并由测试锁定为 Runs 的同一 rawValue 集合。
 // Registry 顶层恰好编码三类集合；未知字段可忽略且重写不保留。
 // PAIR: CheckoutObservation success 必须有 remoteTipSHA；failure 必须没有。
 // FAIL: 缺字段、类型不符、路径/身份配对无效均走损坏 quarantine。
@@ -134,6 +135,18 @@ struct AuditRecord: Codable, Equatable, Sendable {
     enum UpdateRunPhase: String, Codable, Equatable, Sendable {
         case started
         case terminal
+    }
+
+    enum UpdateFailureReasonCode: String, CaseIterable, Equatable, Sendable {
+        case lockBusy = "lock-busy"
+        case identityChanged = "identity-changed"
+        case fetchFailure = "fetch-failure"
+        case preconditionChanged = "precondition-changed"
+        case tipChanged = "tip-changed"
+        case fastForwardRejected = "ff-rejected"
+        case commandFailure = "command-failure"
+        case verificationFailed = "verification-failed"
+        case interruptedUnknown = "interrupted-unknown"
     }
 
     struct CheckRunScope: Codable, Equatable, Sendable {
@@ -362,7 +375,9 @@ struct AuditRecord: Codable, Equatable, Sendable {
                 case .success, .cancelled:
                     return updateRunPlan != nil && updateFailureReason == nil
                 case .failed:
-                    return updateFailureReason.map(isNormalizedReasonCode) ?? false
+                    return updateFailureReason.map {
+                        UpdateFailureReasonCode(rawValue: $0) != nil
+                    } ?? false
                 case .none, .created, .deleted, .complete, .partial:
                     return false
                 }
@@ -424,11 +439,6 @@ private func isNormalizedRelativePath(_ path: String) -> Bool {
 
 private func isFullGitSHA(_ value: String) -> Bool {
     [40, 64].contains(value.count) && value.allSatisfy(\.isHexDigit)
-}
-
-private func isNormalizedReasonCode(_ value: String) -> Bool {
-    !value.isEmpty && value.first != "-" && value.last != "-" &&
-        !value.contains("--") && value.allSatisfy { $0.isLowercase || $0 == "-" }
 }
 
 private func isNormalizedSkillSourceKey(_ value: String) -> Bool {
