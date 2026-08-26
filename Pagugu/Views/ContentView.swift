@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -14,10 +13,12 @@ import UniformTypeIdentifiers
 //      结果区统一承载六类反馈（成功、noop、取消后果、写失败、刷新失败、检查总结），信息/警示分级、可关闭。
 //      工具栏提供全量手动检查、扫描范围管理与「最近活动」三语义面（摘要、详情、清空确认；
 //      详情标注「当时记录」，失败无 stderr/命令复制/重试，只导航相关 Skill；损坏呈现「历史不可用」）；
-//      Registry 故障由全窗口门面接管，重置后呈现 quarantine 备份路径横幅。
+//      Registry 故障由全窗口门面接管，重置后呈现 quarantine 备份路径横幅；
+//      「退出自行修复」只发 AppModel.requestQuit，不直接 terminate。
 //      全部视觉常量消费 DesignTokens（repo://Pagugu/Views/DesignTokens.swift），不逐组件手写冲突值。
 //      View 只消费 Skill Read Model 与审计投影、只发 AppModel intent，不做 IO。
-// TEST: repo://PaguguTests/AppModelTests.swift（投影与 intent smoke）；repo://PaguguTests/PaguguTests.swift（ContentView 构造、确认页完整 SHA、DesignTokens）。
+// TEST: repo://PaguguTests/AppModelTests.swift（投影与 intent smoke）；
+//       repo://PaguguTests/PaguguTests.swift（ContentView 构造、确认页完整 SHA、DesignTokens、受限恢复退出不直接 terminate）。
 
 struct ContentView: View {
     @ObservedObject var model: AppModel
@@ -31,7 +32,7 @@ struct ContentView: View {
     var body: some View {
         Group {
             if let recovery = model.registryRecovery {
-                RegistryRecoveryView(recovery: recovery) {
+                RegistryRecoveryView(recovery: recovery, quit: { model.requestQuit() }) {
                     await model.resetRegistry(confirmed: true)
                 }
             } else if model.registryReady {
@@ -688,6 +689,7 @@ private struct ProjectScanRootManagementView: View {
 
 private struct RegistryRecoveryView: View {
     let recovery: RegistryRecovery
+    let quit: () -> Void
     let reset: () async -> Void
     @State private var showsResetConfirmation = false
 
@@ -706,7 +708,7 @@ private struct RegistryRecoveryView: View {
                 showsResetConfirmation = true
             }
             Button("退出自行修复") {
-                NSApplication.shared.terminate(nil)
+                quit()
             }
         }
         .alert("确认重置 App Registry？", isPresented: $showsResetConfirmation) {

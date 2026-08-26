@@ -124,6 +124,22 @@ final class PaguguTests: XCTestCase {
         model.dismissRegistryResetBackupPath()
     }
 
+    func testContentViewRecoveryQuitDoesNotCallNSApplicationTerminate() throws {
+        let contentView = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Pagugu/Views/ContentView.swift")
+        let source = try String(contentsOf: contentView, encoding: .utf8)
+        XCTAssertFalse(
+            source.contains("NSApplication.shared.terminate"),
+            "受限恢复「退出自行修复」不得由 ContentView 直接 terminate"
+        )
+        XCTAssertTrue(
+            source.contains("model.requestQuit()"),
+            "退出自行修复必须走 AppModel.requestQuit"
+        )
+    }
+
     // MARK: - Design Tokens（#28：令牌不变量；错误实现会漂密度、按压或状态色）
 
     func testChildIndentEqualsDisclosureHotspotPlusRowSpacing() {

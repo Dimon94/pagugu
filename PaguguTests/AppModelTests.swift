@@ -444,6 +444,31 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: registryURL), futureData)
     }
 
+    @MainActor
+    func testRequestQuitTerminatesApplicationWithoutEnteringWorkflow() async throws {
+        let dataDirectory = tmp.appendingPathComponent("data")
+        try fm.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
+        try Data("{".utf8).write(to: dataDirectory.appendingPathComponent("registry.json"))
+        var quitCount = 0
+        let model = AppModel(
+            personalRoots: [],
+            persistence: Persistence(directoryURL: dataDirectory),
+            terminateApplication: { quitCount += 1 }
+        )
+
+        await model.start()
+        XCTAssertFalse(model.registryReady)
+        XCTAssertNotNil(model.registryRecovery)
+        XCTAssertTrue(model.readModel.isEmpty)
+
+        model.requestQuit()
+
+        XCTAssertEqual(quitCount, 1, "退出自行修复必须发出应用退出 intent")
+        XCTAssertFalse(model.registryReady, "退出不进入工作流")
+        XCTAssertNotNil(model.registryRecovery, "退出不重置 Registry 受限恢复态")
+        XCTAssertTrue(model.readModel.isEmpty)
+    }
+
     // MARK: - Project Scan Root 管理（#18）
 
     @MainActor

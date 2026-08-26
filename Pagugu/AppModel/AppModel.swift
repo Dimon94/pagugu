@@ -6,10 +6,11 @@ import Foundation
 //      owns Skill Read Model、受限恢复与来源映射错误投影、目录收起、Check/Update 瞬态、全部 UI intent
 //      与启动/刷新编排；每次发布按实时事实重推导观察 freshness。取消确认后，目标检出在新的成功检查前
 //      不再消费旧观察。审计历史投影只服务「最近活动」呈现；
-//      Registry reset 成功后呈现 quarantine 备份路径。does not own 直接 Git/文件系统/持久 IO
+//      Registry reset 成功后呈现 quarantine 备份路径；受限恢复「退出自行修复」经 requestQuit 发出应用退出 intent。
+//      does not own 直接 Git/文件系统/持久 IO
 //      （经 Git/Discovery/Registry/Audit/Runs seam）、
 //      业务规则重建。
-// TEST: repo://PaguguTests/AppModelTests.swift（Registry gate、Project Scan Root intent、
+// TEST: repo://PaguguTests/AppModelTests.swift（Registry gate、requestQuit 退出 intent、Project Scan Root intent、
 //      目录投影与 intent 路由 smoke、审计呈现投影）。
 
 enum AppRun: Equatable, Sendable {
@@ -93,6 +94,7 @@ final class AppModel: ObservableObject {
     private let audit: AuditEvidence
     private let gitInspector: any GitInspecting
     private let gitExecutor: any GitExecuting
+    private let terminateApplication: () -> Void
     private var checkScope: [CheckRunTarget] = []
     private var checkRunTargetsByPath: [String: CheckRunTarget] = [:]
     private var checkItemOutcomes: [String: CheckRunItemOutcome] = [:]
@@ -104,7 +106,8 @@ final class AppModel: ObservableObject {
         persistence: Persistence = .live,
         gitInspector: any GitInspecting = GitClient(),
         gitExecutor: any GitExecuting = GitClient(),
-        registryResetter: (any RegistryResetting)? = nil
+        registryResetter: (any RegistryResetting)? = nil,
+        terminateApplication: @escaping () -> Void = {}
     ) {
         let registry = AppRegistry(persistence: persistence, personalRoots: personalRoots)
         self.personalRoots = personalRoots
@@ -113,6 +116,7 @@ final class AppModel: ObservableObject {
         self.audit = AuditEvidence(persistence: persistence)
         self.gitInspector = gitInspector
         self.gitExecutor = gitExecutor
+        self.terminateApplication = terminateApplication
     }
 
     // MARK: - 启动流水线（ADR-0009 §13）
@@ -515,6 +519,15 @@ final class AppModel: ObservableObject {
     /// 已写 start 而未写 terminal 的 Update 审计在重启后按 interrupted-unknown 呈现。
     func terminateInFlightGitProcesses() {
         gitExecutor.terminateInFlight()
+    }
+
+    // L4 IN: 受限恢复「退出自行修复」经此发出应用退出 intent。
+    // OUT: 请求应用退出；不重置 Registry、不发布工作流。生产入口由 PaguguApp 注入 NSApplication.terminate。
+    // INVARIANT: View 不直接 terminate；退出仍走 applicationWillTerminate → terminateInFlightGitProcesses。
+    // TEST: repo://PaguguTests/AppModelTests.swift::testRequestQuitTerminatesApplicationWithoutEnteringWorkflow
+    //       repo://PaguguTests/PaguguTests.swift::testContentViewRecoveryQuitDoesNotCallNSApplicationTerminate
+    func requestQuit() {
+        terminateApplication()
     }
 
     func addProjectScanRoot(_ url: URL) async {
