@@ -297,6 +297,94 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertEqual(result.skills.first?.name, "skill-a")
     }
 
+    func testProjectScanRootSkipsDenylistedDirectoriesAndRecordsIssues() throws {
+        let root = tmp.appendingPathComponent("project")
+        let deniedDirectoryNames = [".git", "node_modules", ".build", "vendor"]
+        for directoryName in deniedDirectoryNames {
+            try writeSkill(
+                at: root.appendingPathComponent(directoryName).appendingPathComponent("hidden-skill"),
+                name: directoryName
+            )
+        }
+        try writeSkill(at: root.appendingPathComponent("skills/visible-skill"), name: "visible")
+
+        let result = Discovery.scanProjectRoot(root.path)
+
+        XCTAssertEqual(result.skills.map(\.name), ["visible"], "denylist 目录内的 SKILL.md 不得进入列表")
+        XCTAssertEqual(
+            Set(result.issues.map(\.path)),
+            Set(deniedDirectoryNames.map { root.appendingPathComponent($0).path }),
+            "每个跳过的 denylist 目录都必须记录 Scan Issue"
+        )
+        if case .complete = result.outcome {
+            // denylist 是扫描几何；排除已由 Scan Issue 显式呈现。
+        } else {
+            XCTFail("预期排除不能阻断依赖完整扫描的检查与更新")
+        }
+    }
+
+    func testProjectDenylistCannotBeBypassedThroughSymlinkAlias() throws {
+        let root = tmp.appendingPathComponent("project")
+        let nodeModules = root.appendingPathComponent("node_modules")
+        try writeSkill(at: nodeModules.appendingPathComponent("hidden-skill"), name: "hidden")
+        let alias = root.appendingPathComponent("dependency-alias")
+        try fm.createSymbolicLink(at: alias, withDestinationURL: nodeModules)
+
+        let result = Discovery.scanProjectRoot(root.path)
+
+        XCTAssertTrue(result.skills.isEmpty, "软链接别名不得绕过 canonical 路径中的 denylist")
+        XCTAssertEqual(Set(result.issues.map(\.path)), [nodeModules.path, alias.path])
+        if case .complete = result.outcome {
+            // 预期结果
+        } else {
+            XCTFail("软链接别名命中 denylist 仍属于预期排除")
+        }
+    }
+
+    func testProjectScanRootStopsAfterDepthTenAndRecordsIssue() throws {
+        let root = tmp.appendingPathComponent("project")
+        var depthTen = root
+        for level in 1...10 {
+            depthTen = depthTen.appendingPathComponent("allowed-\(level)")
+        }
+        try writeSkill(at: depthTen, name: "depth-10")
+
+        var depthEleven = root
+        for level in 1...11 {
+            depthEleven = depthEleven.appendingPathComponent("blocked-\(level)")
+        }
+        try writeSkill(at: depthEleven, name: "depth-11")
+
+        let result = Discovery.scanProjectRoot(root.path)
+
+        XCTAssertEqual(result.skills.map(\.name), ["depth-10"], "第 10 层可扫描，第 11 层不得进入")
+        XCTAssertTrue(
+            result.issues.contains { $0.path == depthEleven.path && $0.reason.contains("10") },
+            "第 11 层必须记录含深度上限的 Scan Issue"
+        )
+        if case .partial = result.outcome {
+            // 预期结果
+        } else {
+            XCTFail("达到深度上限后不能把扫描伪装成完整")
+        }
+    }
+
+    func testHiddenDirectoriesRemainScannable() throws {
+        let projectRoot = tmp.appendingPathComponent("project")
+        try writeSkill(at: projectRoot.appendingPathComponent(".custom/project-skill"), name: "project-hidden")
+
+        let personalRoot = tmp.appendingPathComponent("personal")
+        try writeSkill(at: personalRoot.appendingPathComponent(".custom/personal-skill"), name: "personal-hidden")
+
+        let projectResult = Discovery.scanProjectRoot(projectRoot.path)
+        let personalResult = Discovery.scanPersonalRoots([personalRoot.path])
+
+        XCTAssertEqual(projectResult.skills.map(\.name), ["project-hidden"])
+        XCTAssertEqual(personalResult.skills.map(\.name), ["personal-hidden"])
+        XCTAssertTrue(projectResult.issues.isEmpty)
+        XCTAssertTrue(personalResult.issues.isEmpty)
+    }
+
     // MARK: - 展示名来自 frontmatter name（不是安装目录 basename）
 
     func testSkillNameComesFromFrontmatterNotDirectoryName() throws {

@@ -3,8 +3,9 @@ import Foundation
 
 // L3 COORD: Pagugu/Discovery/SkillDiscovery.swift
 // POS: Discovery 模块（ADR-0009 §2）。owns Discovery Scan：遍历 Scan Root、发现入口标注、
-//      软链接解析、Canonical Path 去重防环、SKILL.md 解析校验与原文读取、
-//      Git 工作树根检测（.git 存在性）、复制投影内容指纹（确定性、fail closed）、Scan Issue。
+//      Project Scan Root denylist 与 10 层深度保险、软链接解析、Canonical Path 去重防环、
+//      SKILL.md 解析校验与原文读取、Git 工作树根检测（.git 存在性）、
+//      复制投影内容指纹（确定性、fail closed）、Scan Issue。
 //      does not own 身份归因与指纹聚合（归 Identity）、Git 子进程（归 Git seam，#19）。
 // TEST: repo://PaguguTests/DiscoveryTests.swift（scratch 扫描测试）。
 // IN: Personal 与 Project Scan Root 路径列表；OUT: ScanResult（skills + issues + outcome）。
@@ -90,6 +91,13 @@ enum Discovery {
         ("~/.codex/skills" as NSString).expandingTildeInPath,
     ]
 
+    private static let maximumProjectScanDepth = 10
+    private static let projectScanDirectoryDenylist: Set<String> = [
+        ".build", ".git", ".gradle", ".swiftpm", ".venv",
+        "Carthage", "DerivedData", "Pods",
+        "build", "dist", "node_modules", "out", "target", "vendor", "venv",
+    ]
+
     /// 扫描指定 Personal Skill Root 列表，产出完整 ScanResult。
     /// Root 不存在时视为正常空态（#3 resolution §8）；其他错误记 Scan Issue 并标记 partial。
     /// Canonical Path 去重仅在同一 root 内防环；跨 root 的同一 Skill 由 Identity 层聚合（ADR-0001 §3）。
@@ -109,8 +117,9 @@ enum Discovery {
             }
             scanDirectory(
                 root,
-                asFoundRoot: root,
+                canonicalRoot: resolveCanonical(root),
                 origin: .personalSkillRoot,
+                depth: 0,
                 canonicals: &canonicals,
                 skills: &skills,
                 issues: &issues,
@@ -147,8 +156,9 @@ enum Discovery {
 
         scanDirectory(
             root,
-            asFoundRoot: root,
+            canonicalRoot: resolveCanonical(root),
             origin: .projectScanRoot,
+            depth: 0,
             canonicals: &canonicals,
             skills: &skills,
             issues: &issues,
@@ -193,10 +203,16 @@ enum Discovery {
 
     // MARK: - 递归遍历
 
+    /// L4 IN: `depth` 以当前 as-found root 为 0；origin 决定扫描几何；canonicalRoot 用于识别软链接目标。
+    /// OUT: 追加发现事实；Project Scan Root 命中 denylist 时追加 Scan Issue，第 11 层另标记 partial。
+    /// INVARIANT: Project Scan Root 只扫描 0...10 层，as-found 与 canonical 遍历路径均不能绕过 denylist；
+    ///            Personal Skill Root 不套用该策略；两者都保持命中 Skill 后叶子停止与 Canonical Path 防环。
+    /// TEST: repo://PaguguTests/DiscoveryTests.swift（denylist、软链接别名、深度 10 边界、隐藏目录与防环）。
     private static func scanDirectory(
         _ path: String,
-        asFoundRoot: String,
+        canonicalRoot: String,
         origin: DiscoveryOrigin,
+        depth: Int,
         canonicals: inout Set<String>,
         skills: inout [DiscoveredSkill],
         issues: inout [ScanIssue],
@@ -261,8 +277,6 @@ enum Discovery {
         }
 
         for child in children.sorted() {
-            // `.git` 是 Git 内部目录，永不递归（仓库行语义自 #16 起，工作树可出现在 Scan Root 内）
-            if child == ".git" { continue }
             let childPath = (path as NSString).appendingPathComponent(child)
 
             // 跟随软链接后的 canonical 路径用于防环
@@ -281,10 +295,37 @@ enum Discovery {
                 continue // 跳过非目录条目
             }
 
+            if origin == .projectScanRoot,
+               let deniedName = deniedProjectDirectoryName(
+                   asFoundName: child,
+                   canonicalPath: canonical,
+                   canonicalRoot: canonicalRoot
+               ) {
+                issues.append(ScanIssue(
+                    path: childPath,
+                    reason: "Project Scan Root denylist 已跳过目录：\(deniedName)"
+                ))
+                // denylist 定义可信扫描几何；Issue 让排除可见，但不把预期排除误判为不完整。
+                continue
+            }
+
+            let childDepth = depth + 1
+            if origin == .projectScanRoot, childDepth > maximumProjectScanDepth {
+                issues.append(ScanIssue(
+                    path: childPath,
+                    reason: "Project Scan Root 已达到 \(maximumProjectScanDepth) 层深度上限"
+                ))
+                partial = true
+                continue
+            }
+            // Personal Skill Root 仍只跳过 Git 内部目录，不套用 Project Scan Root denylist 或深度上限。
+            if child == ".git" { continue }
+
             scanDirectory(
                 childPath,
-                asFoundRoot: asFoundRoot,
+                canonicalRoot: canonicalRoot,
                 origin: origin,
+                depth: childDepth,
                 canonicals: &canonicals,
                 skills: &skills,
                 issues: &issues,
@@ -292,6 +333,25 @@ enum Discovery {
                 partial: &partial
             )
         }
+    }
+
+    private static func deniedProjectDirectoryName(
+        asFoundName: String,
+        canonicalPath: String,
+        canonicalRoot: String
+    ) -> String? {
+        if projectScanDirectoryDenylist.contains(asFoundName) {
+            return asFoundName
+        }
+
+        let rootComponents = (canonicalRoot as NSString).pathComponents
+        let pathComponents = (canonicalPath as NSString).pathComponents
+        let sharedPrefixCount = zip(rootComponents, pathComponents)
+            .prefix { $0.0 == $0.1 }
+            .count
+        return pathComponents
+            .dropFirst(sharedPrefixCount)
+            .first { projectScanDirectoryDenylist.contains($0) }
     }
 
     // MARK: - Canonical Path
