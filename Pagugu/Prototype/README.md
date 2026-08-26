@@ -8,13 +8,9 @@
 
 **Verdict 已确认（2026-08-24，HITL）：Variant F「主从（目录 + 详情 + 原文）」。** 完整裁决、被否决方向、为 #11 的验收场景与剩余 Unknown 见 `Pagugu/Prototype/DECISION.md`。
 
-## 运行
+## 保留方式
 
-```bash
-./script/build_and_run.sh
-```
-
-窗口标题为 `Pagugu · PROTOTYPE`。顶部紫色条是原型工具（场景 + 模拟 + 提示），底部浮层切换 variant（也可按 ← / →；文本输入聚焦时不截获方向键）。状态栏入口行为不变：只打开主窗口 / 退出。
+这些文件仅作为规划证据保留在工程 group 中。Pagugu 与 PaguguTests target 均不编译本目录的 Swift 文件。阅读源码与本目录的裁决记录即可回看原型，不提供可运行入口。
 
 ## Variants（A–E 已淘汰，F 为 validated verdict）
 

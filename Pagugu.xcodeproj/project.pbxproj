@@ -28,15 +28,6 @@
 		D15A00000000000000000012 /* SkillIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15A00000000000000000011 /* SkillIdentity.swift */; };
 		D15A00000000000000000002 /* IdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15A00000000000000000001 /* IdentityTests.swift */; };
 		2F2190FFC541C404FC060850 /* PaguguTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4E55B78FCEBA348B72F43A4 /* PaguguTests.swift */; };
-		AA100000000000000000B001 /* PrototypeSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100000000000000000A001 /* PrototypeSupport.swift */; };
-		AA100000000000000000B002 /* PrototypeSharedUI.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100000000000000000A002 /* PrototypeSharedUI.swift */; };
-		AA100000000000000000B003 /* PrototypeVariantA.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100000000000000000A003 /* PrototypeVariantA.swift */; };
-		AA100000000000000000B004 /* PrototypeVariantB.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100000000000000000A004 /* PrototypeVariantB.swift */; };
-		AA100000000000000000B005 /* PrototypeVariantC.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100000000000000000A005 /* PrototypeVariantC.swift */; };
-		AA100000000000000000B006 /* PrototypeRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100000000000000000A006 /* PrototypeRoot.swift */; };
-		AA100000000000000000B007 /* PrototypeVariantD.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100000000000000000A007 /* PrototypeVariantD.swift */; };
-		AA100000000000000000B008 /* PrototypeVariantE.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100000000000000000A008 /* PrototypeVariantE.swift */; };
-		AA100000000000000000B009 /* PrototypeVariantF.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100000000000000000A009 /* PrototypeVariantF.swift */; };
 		40F4734042A82853E4E20514 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09BE7DE72F107FBC97261DC7 /* ContentView.swift */; };
 		59B9932F242F70D4CF61988F /* PaguguApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C12C2329B72ACE494385C03 /* PaguguApp.swift */; };
 		771836A7F79E74FBDFD2E975 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EE34382C914BCF5B40B37632 /* Cocoa.framework */; };
@@ -309,15 +300,6 @@
 				D19000000000000000000003 /* GitClient.swift in Sources */,
 				D19000000000000000000005 /* CheckoutEligibility.swift in Sources */,
 				D21000000000000000000003 /* CheckRun.swift in Sources */,
-				AA100000000000000000B001 /* PrototypeSupport.swift in Sources */,
-				AA100000000000000000B002 /* PrototypeSharedUI.swift in Sources */,
-				AA100000000000000000B003 /* PrototypeVariantA.swift in Sources */,
-				AA100000000000000000B004 /* PrototypeVariantB.swift in Sources */,
-				AA100000000000000000B005 /* PrototypeVariantC.swift in Sources */,
-				AA100000000000000000B006 /* PrototypeRoot.swift in Sources */,
-				AA100000000000000000B007 /* PrototypeVariantD.swift in Sources */,
-				AA100000000000000000B008 /* PrototypeVariantE.swift in Sources */,
-				AA100000000000000000B009 /* PrototypeVariantF.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
