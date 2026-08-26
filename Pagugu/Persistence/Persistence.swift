@@ -13,6 +13,10 @@ import Foundation
 // Registry 顶层恰好编码三类集合；未知字段可忽略且重写不保留。
 // PAIR: CheckoutObservation success 必须有 remoteTipSHA；failure 必须没有。
 // FAIL: 缺字段、类型不符、路径/身份配对无效均走损坏 quarantine。
+private struct RegistrySchemaHeader: Decodable {
+    let schemaVersion: Int
+}
+
 struct RegistryDocument: Codable, Equatable, Sendable {
     static let currentSchemaVersion = 1
     static let empty = RegistryDocument(
@@ -707,15 +711,95 @@ actor Persistence {
     }
 
     private func decodeSchemaVersion(from data: Data) throws -> Int {
-        let json = try JSONSerialization.jsonObject(with: data)
-        guard let object = json as? [String: Any],
-              let number = object["schemaVersion"] as? NSNumber,
-              CFGetTypeID(number) != CFBooleanGetTypeID(),
-              !CFNumberIsFloatType(number),
-              let schemaVersion = Int(number.stringValue) else {
+        let header = try JSONDecoder().decode(RegistrySchemaHeader.self, from: data)
+        guard schemaVersionUsesIntegerToken(in: data) else {
             throw RegistryValidationError.invalidSchemaVersion
         }
-        return schemaVersion
+        return header.schemaVersion
+    }
+
+    private func schemaVersionUsesIntegerToken(in data: Data) -> Bool {
+        let bytes = [UInt8](data)
+        var index = 0
+        var depth = 0
+
+        while index < bytes.count {
+            switch bytes[index] {
+            case 0x22:
+                let stringStart = index
+                guard let stringEnd = jsonStringEnd(startingAt: index, in: bytes) else {
+                    return false
+                }
+                index = stringEnd + 1
+                guard depth == 1 else { continue }
+
+                var delimiterIndex = index
+                skipJSONWhitespace(in: bytes, from: &delimiterIndex)
+                guard delimiterIndex < bytes.count, bytes[delimiterIndex] == 0x3A else {
+                    continue
+                }
+                guard let key = try? JSONDecoder().decode(
+                    String.self,
+                    from: Data(bytes[stringStart...stringEnd])
+                ), key == "schemaVersion" else {
+                    continue
+                }
+
+                var valueIndex = delimiterIndex + 1
+                skipJSONWhitespace(in: bytes, from: &valueIndex)
+                return isJSONIntegerToken(in: bytes, startingAt: valueIndex)
+            case 0x7B, 0x5B:
+                depth += 1
+                index += 1
+            case 0x7D, 0x5D:
+                depth -= 1
+                index += 1
+            default:
+                index += 1
+            }
+        }
+        return false
+    }
+
+    private func jsonStringEnd(startingAt start: Int, in bytes: [UInt8]) -> Int? {
+        var index = start + 1
+        var isEscaped = false
+        while index < bytes.count {
+            if isEscaped {
+                isEscaped = false
+            } else if bytes[index] == 0x5C {
+                isEscaped = true
+            } else if bytes[index] == 0x22 {
+                return index
+            }
+            index += 1
+        }
+        return nil
+    }
+
+    private func skipJSONWhitespace(in bytes: [UInt8], from index: inout Int) {
+        while index < bytes.count, [0x20, 0x09, 0x0A, 0x0D].contains(bytes[index]) {
+            index += 1
+        }
+    }
+
+    private func isJSONIntegerToken(in bytes: [UInt8], startingAt start: Int) -> Bool {
+        guard start < bytes.count else { return false }
+        var index = start
+        if bytes[index] == 0x2D {
+            index += 1
+            guard index < bytes.count else { return false }
+        }
+
+        if bytes[index] == 0x30 {
+            index += 1
+        } else {
+            guard (0x31...0x39).contains(bytes[index]) else { return false }
+            repeat { index += 1 } while index < bytes.count && (0x30...0x39).contains(bytes[index])
+        }
+
+        guard index < bytes.count else { return true }
+        return [0x20, 0x09, 0x0A, 0x0D, 0x2C, 0x7D].contains(bytes[index])
     }
 
     private func quarantineCorruptRegistry() -> URL {

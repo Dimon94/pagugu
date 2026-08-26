@@ -149,6 +149,30 @@ final class PersistenceTests: XCTestCase {
         }
     }
 
+    // review-r2 回归守卫：schema 版本边界必须保持 typed Decodable，不能退回无类型桥接。
+    func testSchemaVersionDecoderUsesTypedBoundaryWithoutUntypedJSONBridges() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Pagugu/Persistence/Persistence.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let start = try XCTUnwrap(source.range(of: "private func decodeSchemaVersion"))
+        let end = try XCTUnwrap(source.range(
+            of: "private func quarantineCorruptRegistry",
+            range: start.upperBound..<source.endIndex
+        ))
+        let decoderSource = source[start.lowerBound..<end.lowerBound]
+
+        XCTAssertTrue(decoderSource.contains("JSONDecoder"))
+        XCTAssertTrue(decoderSource.contains("RegistrySchemaHeader.self"))
+        for forbiddenBoundary in ["JSONSerialization", "[String: Any]", "NSNumber"] {
+            XCTAssertFalse(
+                decoderSource.contains(forbiddenBoundary),
+                "schemaVersion 解码不得使用无类型边界：\(forbiddenBoundary)"
+            )
+        }
+    }
+
     func testSourceMappingAcceptsEmptyRelativePathForSkillAtRepositoryRoot() async throws {
         let caseDirectory = directoryURL.appendingPathComponent(UUID().uuidString)
         try fileManager.createDirectory(at: caseDirectory, withIntermediateDirectories: true)
