@@ -3,11 +3,15 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 // L3 COORD: Pagugu/Views/ContentView.swift
-// POS: 主窗口内容（Variant F 主从结构，#16 落地目录 IA，#20 落地目录状态短语与静默排序）。
+// POS: 主窗口内容（Variant F 主从结构，#16 落地目录 IA，#20 落地目录状态短语与静默排序，#27 接线 Update Run）。
 //      左侧：平铺目录——来源仓库行（可收起/展开子 Skill 行，默认展开，chevron 独立热区）
 //      + 无仓库可归行（来源不明）；消费 Skill Read Model 给出的逐态短语与五档顺序；无分组标题、无筛选 UI。
-//      右侧：Skill 详情四块（状态与检出、安装位置、来源标识、SKILL.md 原文只读可选中）；
-//      空选择回欢迎引导。「相关记录」「更新动作」块归后续票。
+//      右侧：Skill 详情五块（状态与检出、安装位置、来源标识、SKILL.md 原文只读可选中、更新动作）；
+//      空选择回欢迎引导。「相关记录」经工具栏「最近活动」承载。
+//      检出卡逐检出提供「更新…」intent（仅 update-available 可用，其余禁用并给出原因）；
+//      确认页列出 Skill Identity、目标检出、branch/upstream、当前 HEAD → 精确 target SHA、behind 数、
+//      影响范围声明与「同一仓库的 N 个 Skill 将一起前进」名单；多 Eligible 检出当次选择不持久化。
+//      结果区统一承载六类反馈（成功、noop、取消后果、写失败、刷新失败、检查总结），信息/警示分级、可关闭。
 //      工具栏提供全量手动检查、扫描范围管理与「最近活动」三语义面（摘要、详情、清空确认；
 //      详情标注「当时记录」，失败无 stderr/命令复制/重试，只导航相关 Skill；损坏呈现「历史不可用」）；
 //      Registry 故障由全窗口门面接管，重置后呈现 quarantine 备份路径横幅。
@@ -21,6 +25,7 @@ struct ContentView: View {
     @State private var showsProjectRootImporter = false
     @State private var showsRecentActivity = false
     @State private var mappingRequest: MappingRequest?
+    @State private var updateRequest: UpdateRequest?
 
     var body: some View {
         Group {
@@ -87,31 +92,19 @@ struct ContentView: View {
                 displayName: request.displayName
             )
         }
-        .alert(
-            "无法保存 App Registry",
-            isPresented: Binding(
-                get: { model.projectScanRootError != nil },
-                set: { isPresented in
-                    if !isPresented { model.clearProjectScanRootError() }
-                }
+        .sheet(item: $updateRequest) { request in
+            UpdateConfirmationSheet(
+                model: model,
+                skill: request.skill,
+                eligibleCheckoutPaths: request.eligibleCheckoutPaths,
+                preselectedCheckoutPath: request.preselectedCheckoutPath
             )
-        ) {
-            Button("好") {
-                model.clearProjectScanRootError()
-            }
-        } message: {
-            Text(model.projectScanRootError?.reason ?? "Unknown")
         }
-        .alert(
-            "无法保存来源映射",
-            isPresented: Binding(
-                get: { model.sourceMappingError != nil },
-                set: { if !$0 { model.clearSourceMappingError() } }
-            )
-        ) {
-            Button("好") { model.clearSourceMappingError() }
-        } message: {
-            Text(model.sourceMappingError?.reason ?? "Unknown")
+        .sheet(item: Binding(
+            get: { model.pendingUpdatePlan.map(PreparedUpdatePlanBox.init(plan:)) },
+            set: { _ in }
+        )) { box in
+            PreparedUpdateSheet(model: model, plan: box.plan)
         }
     }
 
@@ -134,36 +127,7 @@ struct ContentView: View {
             )
         } detail: {
             VStack(spacing: 0) {
-                if let backupPath = model.registryResetBackupPath {
-                    HStack(spacing: 8) {
-                        Image(systemName: "checkmark.circle")
-                            .foregroundStyle(.green)
-                        Text("Registry 已重置为空。原文件备份在：")
-                        Text(backupPath)
-                            .font(.caption.monospaced())
-                            .textSelection(.enabled)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Spacer()
-                        Button("关闭", systemImage: "xmark") {
-                            model.dismissRegistryResetBackupPath()
-                        }
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(.plain)
-                    }
-                    .font(.callout)
-                    .padding(10)
-                    .background(Color.green.opacity(0.10))
-                }
-                if let progress = model.checkRunProgress {
-                    CheckRunBanner(progress: progress, summary: nil, onDismiss: nil)
-                } else if let summary = model.checkRunSummary {
-                    CheckRunBanner(
-                        progress: nil,
-                        summary: summary,
-                        onDismiss: model.dismissCheckRunSummary
-                    )
-                }
+                ResultAreaView(model: model)
                 detailView
             }
         }
@@ -214,6 +178,16 @@ struct ContentView: View {
                     entry: entry,
                     checkouts: model.readModel.checkoutCards(for: entry.id.sourceKey),
                     markdown: model.skillMarkdown(canonicalPath: entry.canonicalPath),
+                    canStartUpdate: model.canStartUpdateRun,
+                    updateDisabledReason: model.updateRunDisabledReason,
+                    isPreparingUpdate: model.activeRun == .updatePreparing,
+                    startUpdate: { checkoutPath in
+                        updateRequest = UpdateRequest(
+                            skill: entry,
+                            eligibleCheckoutPaths: model.eligibleUpdateCheckoutPaths(for: entry.id),
+                            preselectedCheckoutPath: checkoutPath
+                        )
+                    },
                     deleteMapping: { path in
                         _ = await model.deleteSourceMapping(installationCanonicalPath: path)
                     }
@@ -250,16 +224,129 @@ struct ContentView: View {
     }
 }
 
-private struct CheckRunBanner: View {
-    let progress: CheckRunProgress?
-    let summary: CheckRunSummary?
+// MARK: - 结果区（六类反馈：成功、noop、取消后果、写失败、刷新失败、检查总结）
+// 信息/警示分级、可关闭；同一动作不出现第二处反馈样式。
+
+private struct ResultAreaView: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if let backupPath = model.registryResetBackupPath {
+                ResultBanner(
+                    level: .info,
+                    icon: "checkmark.circle",
+                    text: "Registry 已重置为空。原文件备份在：\(backupPath)",
+                    onDismiss: { model.dismissRegistryResetBackupPath() }
+                )
+            }
+            if let progress = model.checkRunProgress {
+                ResultBanner(
+                    level: .info,
+                    icon: "arrow.triangle.2.circlepath",
+                    text: "检查中 \(progress.completed)/\(progress.total)",
+                    onDismiss: nil
+                )
+            } else if let summary = model.checkRunSummary {
+                ResultBanner(
+                    level: summary.outcome == .complete ? .info : .warning,
+                    icon: summary.outcome == .complete ? "checkmark.circle"
+                        : summary.outcome == .partial ? "exclamationmark.triangle" : "xmark.circle",
+                    text: "检查\(summary.outcome.rawValue)：成功 \(summary.succeeded) · 失败 \(summary.failed) · 不适用 \(summary.skipped)",
+                    onDismiss: { model.dismissCheckRunSummary() }
+                )
+            }
+            if let result = model.updateResult {
+                updateResultBanner(result)
+            }
+            if let refreshFailure = model.updateRefreshFailure {
+                ResultBanner(
+                    level: .warning,
+                    icon: "exclamationmark.triangle",
+                    text: refreshFailure.outcome == .partial
+                        ? "更新后的完整刷新部分完成（\(refreshFailure.issueCount) 个 Scan Issue）。更新本身已成功；可稍后重新扫描。"
+                        : "更新后的完整刷新失败。更新本身已成功；请重新扫描。",
+                    onDismiss: nil
+                )
+            }
+            if let error = model.projectScanRootError {
+                ResultBanner(
+                    level: .warning,
+                    icon: "exclamationmark.triangle",
+                    text: "无法保存 App Registry：\(error.reason)",
+                    onDismiss: { model.clearProjectScanRootError() }
+                )
+            }
+            if let error = model.sourceMappingError {
+                ResultBanner(
+                    level: .warning,
+                    icon: "exclamationmark.triangle",
+                    text: "无法保存来源映射：\(error.reason)",
+                    onDismiss: { model.clearSourceMappingError() }
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func updateResultBanner(_ result: UpdateResult) -> some View {
+        switch result {
+        case .success(_, let targetSHA):
+            ResultBanner(
+                level: .info,
+                icon: "checkmark.circle",
+                text: "更新成功。已 fast-forward 到目标提交（\(String(targetSHA.prefix(7)))）。",
+                onDismiss: { model.dismissUpdateResult() }
+            )
+        case .upToDate:
+            ResultBanner(
+                level: .info,
+                icon: "checkmark.circle",
+                text: "已是最新：重查发现远端没有新提交，未做任何修改。",
+                onDismiss: { model.dismissUpdateResult() }
+            )
+        case .cancelled:
+            ResultBanner(
+                level: .warning,
+                icon: "exclamationmark.triangle",
+                text: UpdateResult.cancellationConsequence,
+                onDismiss: { model.dismissUpdateResult() }
+            )
+        case .failed(let failure):
+            ResultBanner(
+                level: .warning,
+                icon: "xmark.circle",
+                text: "更新失败：\(failure.reason.displayName)。\(failure.recoveryDirection)",
+                onDismiss: { model.dismissUpdateResult() }
+            )
+        }
+    }
+}
+
+private struct ResultBanner: View {
+    enum Level {
+        case info
+        case warning
+    }
+
+    let level: Level
+    let icon: String
+    let text: String
     let onDismiss: (() -> Void)?
+
+    private var color: Color {
+        switch level {
+        case .info: return .green
+        case .warning: return .orange
+        }
+    }
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: iconName)
+            Image(systemName: icon)
                 .foregroundStyle(color)
             Text(text)
+                .font(.callout)
             Spacer()
             if let onDismiss {
                 Button("关闭", systemImage: "xmark", action: onDismiss)
@@ -267,35 +354,205 @@ private struct CheckRunBanner: View {
                     .buttonStyle(.plain)
             }
         }
-        .font(.callout)
         .padding(10)
         .background(color.opacity(0.10))
     }
+}
 
-    private var text: String {
-        if let progress { return "检查中 \(progress.completed)/\(progress.total)" }
-        guard let summary else { return "Unknown" }
-        return "\(summary.outcome.rawValue) · 成功 \(summary.succeeded) · 失败 \(summary.failed) · 不适用 \(summary.skipped)"
-    }
+// MARK: - 更新确认（多检出当次选择 + 冻结计划确认）
 
-    private var iconName: String {
-        if progress != nil { return "arrow.triangle.2.circlepath" }
-        switch summary?.outcome {
-        case .complete: return "checkmark.circle"
-        case .partial: return "exclamationmark.triangle"
-        case .failed: return "xmark.circle"
-        case nil: return "questionmark.circle"
+private struct UpdateRequest: Identifiable {
+    var id: String { skill.id.sourceKey.registryValue + "|" + skill.id.repositoryRelativePath }
+
+    let skill: SkillDirectoryEntry
+    let eligibleCheckoutPaths: [String]
+    var preselectedCheckoutPath: String?
+}
+
+private struct PreparedUpdatePlanBox: Identifiable {
+    var id: String { plan.runID }
+
+    let plan: UpdatePlan
+}
+
+// MARK: - 更新确认 sheet：重查前选择目标检出（多 Eligible 时）
+
+private struct UpdateConfirmationSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var model: AppModel
+    let skill: SkillDirectoryEntry
+    let eligibleCheckoutPaths: [String]
+    @State private var selectedCheckoutPath: String?
+    @State private var isPreparing = false
+    var preselectedCheckoutPath: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("更新 \(skill.displayName)")
+                    .font(.title2.bold())
+                Spacer()
+                Button("关闭") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+            }
+
+            if eligibleCheckoutPaths.count > 1 {
+                Text("该来源有 \(eligibleCheckoutPaths.count) 个可更新检出。当次选择一个，不持久化。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Picker("目标检出", selection: $selectedCheckoutPath) {
+                    ForEach(eligibleCheckoutPaths, id: \.self) { path in
+                        Text(path).tag(Optional(path))
+                    }
+                }
+                .pickerStyle(.radioGroup)
+            } else {
+                Text("目标检出：\(eligibleCheckoutPaths.first ?? "Unknown")")
+                    .font(.callout.monospaced())
+                    .foregroundStyle(.secondary)
+            }
+
+            Text("确认后 Pagugu 会先 fetch 并重查该检出，再给出精确计划。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack {
+                Spacer()
+                Button("取消", role: .cancel) { dismiss() }
+                Button {
+                    guard let path = selectedCheckoutPath ?? eligibleCheckoutPaths.first else { return }
+                    isPreparing = true
+                    Task {
+                        do {
+                            try await model.prepareUpdate(skillIdentity: skill.id, checkoutPath: path)
+                            dismiss()
+                        } catch {
+                            isPreparing = false
+                        }
+                    }
+                } label: {
+                    if isPreparing {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("正在重查…")
+                        }
+                    } else {
+                        Text("重查并确认")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isPreparing)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 560, minHeight: 240)
+        .onAppear {
+            selectedCheckoutPath = preselectedCheckoutPath ?? eligibleCheckoutPaths.first
         }
     }
+}
 
-    private var color: Color {
-        if progress != nil { return .blue }
-        switch summary?.outcome {
-        case .complete: return .green
-        case .partial: return .orange
-        case .failed: return .red
-        case nil: return .secondary
+// MARK: - 冻结计划确认 sheet（S5：列出 Skill Identity、目标检出、branch/upstream、HEAD→SHA、behind、影响范围）
+
+private struct PreparedUpdateSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var model: AppModel
+    let plan: UpdatePlan
+    @State private var isExecuting = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("确认更新")
+                    .font(.title2.bold())
+                Spacer()
+                Button("关闭") { Task { await model.cancelUpdate(); dismiss() } }
+                    .keyboardShortcut(.cancelAction)
+            }
+
+            GroupBox("计划") {
+                VStack(alignment: .leading, spacing: 6) {
+                    LabeledContent("Skill") {
+                        Text("\(plan.skillIdentity.sourceKey.registryValue) · \(plan.skillIdentity.repositoryRelativePath.isEmpty ? "（仓库根目录）" : plan.skillIdentity.repositoryRelativePath)")
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    LabeledContent("目标检出") {
+                        Text(plan.checkoutCanonicalPath)
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    LabeledContent("分支 / upstream") {
+                        Text("\(plan.branchName) / \(plan.upstreamRefName)")
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    LabeledContent("当前 HEAD → 目标") {
+                        Text("\(String(plan.currentHeadSHA.prefix(7))) → \(String(plan.targetSHA.prefix(7)))")
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    LabeledContent("落后") {
+                        Text("\(plan.behindCount) 个提交")
+                            .font(.caption)
+                    }
+                }
+            }
+
+            Text(plan.impactStatement)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            if plan.affectedSkills.count > 1 {
+                GroupBox("影响范围") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("同一仓库的 \(plan.affectedSkills.count) 个 Skill 将一起前进：")
+                            .font(.caption)
+                        ForEach(plan.affectedSkills, id: \.identity.repositoryRelativePath) { affected in
+                            Text("\(affected.displayName)（\(affected.identity.repositoryRelativePath.isEmpty ? "仓库根目录" : affected.identity.repositoryRelativePath)）")
+                                .font(.caption.monospaced())
+                                .textSelection(.enabled)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button("取消", role: .cancel) {
+                    Task { await model.cancelUpdate(); dismiss() }
+                }
+                Button {
+                    isExecuting = true
+                    Task {
+                        do {
+                            try await model.confirmUpdate()
+                            dismiss()
+                        } catch {
+                            isExecuting = false
+                        }
+                    }
+                } label: {
+                    if isExecuting {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("正在执行…")
+                        }
+                    } else {
+                        Text("确认更新")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isExecuting)
+            }
         }
+        .padding(20)
+        .frame(minWidth: 620, minHeight: 360)
     }
 }
 
@@ -757,6 +1014,10 @@ private struct SkillDetailPanel: View {
     let entry: SkillDirectoryEntry
     let checkouts: [CheckoutCardReadModel]
     let markdown: String?
+    let canStartUpdate: Bool
+    let updateDisabledReason: String
+    let isPreparingUpdate: Bool
+    let startUpdate: (String?) -> Void
     let deleteMapping: (String) async -> Void
 
     var body: some View {
@@ -770,7 +1031,13 @@ private struct SkillDetailPanel: View {
 
                 Divider()
 
-                CheckoutStatusBlock(checkouts: checkouts)
+                CheckoutStatusBlock(
+                    checkouts: checkouts,
+                    canStartUpdate: canStartUpdate,
+                    updateDisabledReason: updateDisabledReason,
+                    isPreparingUpdate: isPreparingUpdate,
+                    startUpdate: startUpdate
+                )
 
                 Divider()
 
@@ -790,6 +1057,16 @@ private struct SkillDetailPanel: View {
 
                 MarkdownSourceBlock(markdown: markdown)
 
+                Divider()
+
+                UpdateActionBlock(
+                    checkouts: checkouts,
+                    canStartUpdate: canStartUpdate,
+                    updateDisabledReason: updateDisabledReason,
+                    isPreparingUpdate: isPreparingUpdate,
+                    startUpdate: startUpdate
+                )
+
                 Spacer()
             }
             .padding()
@@ -802,20 +1079,90 @@ private struct SkillDetailPanel: View {
 
 private struct CheckoutStatusBlock: View {
     let checkouts: [CheckoutCardReadModel]
+    let canStartUpdate: Bool
+    let updateDisabledReason: String
+    let isPreparingUpdate: Bool
+    let startUpdate: (String?) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("状态与检出")
                 .font(.headline)
             ForEach(checkouts) { checkout in
-                CheckoutCard(checkout: checkout)
+                CheckoutCard(
+                    checkout: checkout,
+                    canStartUpdate: canStartUpdate,
+                    updateDisabledReason: updateDisabledReason,
+                    isPreparingUpdate: isPreparingUpdate,
+                    startUpdate: startUpdate
+                )
             }
         }
     }
 }
 
+// MARK: - 详情块：更新动作（逐检出 intent 入口；S5/US14）
+
+private struct UpdateActionBlock: View {
+    let checkouts: [CheckoutCardReadModel]
+    let canStartUpdate: Bool
+    let updateDisabledReason: String
+    let isPreparingUpdate: Bool
+    let startUpdate: (String?) -> Void
+
+    private var eligibleCheckouts: [CheckoutCardReadModel] {
+        checkouts.filter { $0.state == .updateAvailable }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("更新动作")
+                .font(.headline)
+            if eligibleCheckouts.isEmpty {
+                Text("当前没有可更新的检出。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(eligibleCheckouts.count == 1
+                     ? "1 个检出可更新。"
+                     : "\(eligibleCheckouts.count) 个检出可更新；确认时当次选择一个，不持久化。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button {
+                    startUpdate(nil)
+                } label: {
+                    if isPreparingUpdate {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("正在重查…")
+                        }
+                    } else {
+                        Text("更新…")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!canStartUpdate || isPreparingUpdate)
+                .help(updateHelp)
+            }
+        }
+    }
+
+    private var updateHelp: String {
+        if !canStartUpdate { return updateDisabledReason }
+        return "重查并确认精确计划后执行；一次只更新一个工作树。"
+    }
+}
+
 private struct CheckoutCard: View {
     let checkout: CheckoutCardReadModel
+    var canStartUpdate: Bool = false
+    var updateDisabledReason: String = ""
+    var isPreparingUpdate: Bool = false
+    var startUpdate: ((String?) -> Void)? = nil
+
+    private var isEligible: Bool {
+        checkout.state == .updateAvailable
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -825,6 +1172,24 @@ private struct CheckoutCard: View {
                 Text(checkout.state.rawValue)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
+                Spacer()
+                if isEligible {
+                    Button {
+                        startUpdate?(checkout.id)
+                    } label: {
+                        if isPreparingUpdate {
+                            HStack(spacing: 4) {
+                                ProgressView().controlSize(.mini)
+                                Text("重查中…")
+                            }
+                        } else {
+                            Text("更新…")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!canStartUpdate || isPreparingUpdate)
+                    .help(updateButtonHelp)
+                }
             }
             Text(checkout.state.recoveryDirection)
                 .font(.caption)
@@ -889,6 +1254,11 @@ private struct CheckoutCard: View {
                 .textSelection(.enabled)
                 .multilineTextAlignment(.trailing)
         }
+    }
+
+    private var updateButtonHelp: String {
+        if !canStartUpdate { return updateDisabledReason }
+        return "重查并确认精确计划后执行；一次只更新一个工作树。"
     }
 
     private var headText: String {
