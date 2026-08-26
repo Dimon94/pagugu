@@ -17,7 +17,7 @@ import UniformTypeIdentifiers
 //      Registry 故障由全窗口门面接管，重置后呈现 quarantine 备份路径横幅。
 //      全部视觉常量消费 DesignTokens（repo://Pagugu/Views/DesignTokens.swift），不逐组件手写冲突值。
 //      View 只消费 Skill Read Model 与审计投影、只发 AppModel intent，不做 IO。
-// TEST: repo://PaguguTests/AppModelTests.swift（投影与 intent smoke）；repo://PaguguTests/PaguguTests.swift（ContentView 构造、DesignTokens）。
+// TEST: repo://PaguguTests/AppModelTests.swift（投影与 intent smoke）；repo://PaguguTests/PaguguTests.swift（ContentView 构造、确认页完整 SHA、DesignTokens）。
 
 struct ContentView: View {
     @ObservedObject var model: AppModel
@@ -492,6 +492,12 @@ private struct UpdateConfirmationSheet: View {
     }
 }
 
+// 确认页「当前 HEAD → 目标」必须展示完整 Git 对象名（40/64 位），不得截成 7 位前缀。
+// TEST: repo://PaguguTests/PaguguTests.swift::testPreparedUpdateConfirmationShowsFullSHAAndRejectsSevenCharPrefix
+func updateConfirmationHeadToTargetText(currentHeadSHA: String, targetSHA: String) -> String {
+    "\(currentHeadSHA) → \(targetSHA)"
+}
+
 // MARK: - 冻结计划确认 sheet（S5：列出 Skill Identity、目标检出、branch/upstream、HEAD→SHA、behind、影响范围）
 
 private struct PreparedUpdateSheet: View {
@@ -531,7 +537,10 @@ private struct PreparedUpdateSheet: View {
                             .multilineTextAlignment(.trailing)
                     }
                     LabeledContent("当前 HEAD → 目标") {
-                        Text("\(String(plan.currentHeadSHA.prefix(7))) → \(String(plan.targetSHA.prefix(7)))")
+                        Text(updateConfirmationHeadToTargetText(
+                            currentHeadSHA: plan.currentHeadSHA,
+                            targetSHA: plan.targetSHA
+                        ))
                             .font(DesignTokens.Fonts.evidence)
                             .textSelection(.enabled)
                             .multilineTextAlignment(.trailing)

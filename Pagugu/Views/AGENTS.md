@@ -9,4 +9,4 @@
 
 反模式: View 不做文件系统/Git/持久 IO，不裁决 Checkout Git State、Check Run 结果或重建目录排序；不引入分组标题与主目录筛选 UI；不按呈现组批量创建映射；不允许自由输入目标或无确认删除；frontmatter name 不同只警告、不阻断；行状态不聚合假状态；「相关记录」经工具栏「最近活动」承载、不建第二处详情块；受限恢复态必须全窗口阻断；历史呈现不冒充当前实时状态，失败详情不提供一键重试；不逐组件手写与 DesignTokens 冲突的间距/圆角/字号/状态色；不引入 ChunUI。
 
-测试锚点: repo://PaguguTests/AppModelTests.swift（投影渲染与 intent 路由 smoke）、repo://PaguguTests/PaguguTests.swift（ContentView 构造、更新结果反馈 smoke、DesignTokens 按压/缩进/状态色）；视觉核对走 `script/build_and_run.sh` 与 repo://docs/product/ui-polish-review.md。
+测试锚点: repo://PaguguTests/AppModelTests.swift（投影渲染与 intent 路由 smoke）、repo://PaguguTests/PaguguTests.swift（ContentView 构造、更新结果反馈 smoke、确认页完整 SHA、DesignTokens 按压/缩进/状态色）；视觉核对走 `script/build_and_run.sh` 与 repo://docs/product/ui-polish-review.md。

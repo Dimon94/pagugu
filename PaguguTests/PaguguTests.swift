@@ -81,6 +81,31 @@ final class PaguguTests: XCTestCase {
         }
     }
 
+    func testPreparedUpdateConfirmationShowsFullSHAAndRejectsSevenCharPrefix() {
+        // 错误实现（prefix(7)）会失败：确认页必须展示完整 40/64 位对象名，不能只剩短前缀。
+        let head40 = String(repeating: "1", count: 40)
+        let target40 = String(repeating: "2", count: 40)
+        let text40 = updateConfirmationHeadToTargetText(currentHeadSHA: head40, targetSHA: target40)
+        XCTAssertEqual(text40, "\(head40) → \(target40)")
+        XCTAssertNotEqual(
+            text40,
+            "\(String(head40.prefix(7))) → \(String(target40.prefix(7)))",
+            "确认页文本只含 7 位短 SHA 则失败"
+        )
+
+        let head64 = String(repeating: "ab", count: 32)
+        let target64 = String(repeating: "cd", count: 32)
+        let text64 = updateConfirmationHeadToTargetText(currentHeadSHA: head64, targetSHA: target64)
+        XCTAssertEqual(text64, "\(head64) → \(target64)")
+        XCTAssertEqual(head64.count, 64)
+        XCTAssertEqual(target64.count, 64)
+        XCTAssertNotEqual(
+            text64,
+            "\(String(head64.prefix(7))) → \(String(target64.prefix(7)))",
+            "确认页文本只含 7 位短 SHA 则失败"
+        )
+    }
+
     @MainActor
     func testUpdateIntentsExistOnAppModel() {
         let model = AppModel(
