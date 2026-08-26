@@ -286,6 +286,56 @@ final class GitEligibilityTests: XCTestCase {
         XCTAssertTrue(sshArguments.contains("StrictHostKeyChecking=yes"))
     }
 
+    func testTerminateInFlightStopsGitProcessBeforeItsTimeout() async throws {
+        let repository = try makeRepository(named: "terminate-in-flight", withRemote: false)
+        let bin = scratch.appendingPathComponent("terminate-bin")
+        let ssh = bin.appendingPathComponent("ssh")
+        let evidence = scratch.appendingPathComponent("terminate-started")
+        try write(
+            """
+            #!/bin/sh
+            touch "$PAGUGU_TERMINATE_EVIDENCE"
+            parent=$PPID
+            while kill -0 "$parent" 2>/dev/null; do sleep 0.05; done
+            exit 77
+            """,
+            to: ssh
+        )
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ssh.path)
+        let originalPath = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
+        setenv("PATH", "\(bin.path):\(originalPath)", 1)
+        setenv("PAGUGU_TERMINATE_EVIDENCE", evidence.path, 1)
+        defer {
+            setenv("PATH", originalPath, 1)
+            unsetenv("PAGUGU_TERMINATE_EVIDENCE")
+        }
+        try git(["remote", "add", "origin", "ssh://example.invalid/team/skills.git"], at: repository.repo)
+        let client = GitClient(timeoutSeconds: 30)
+        let started = ContinuousClock.now
+        let fetch = Task {
+            try await client.fetch(
+                remote: "origin",
+                upstreamRef: "origin/main",
+                at: repository.repo.path
+            )
+        }
+        for _ in 0..<100 where !FileManager.default.fileExists(atPath: evidence.path) {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: evidence.path))
+
+        client.terminateInFlight()
+
+        do {
+            try await fetch.value
+            XCTFail("终止中的 Git 进程必须返回失败")
+        } catch is GitCommandError {
+            XCTAssertLessThan(started.duration(to: .now), .seconds(3))
+        } catch {
+            XCTFail("终止应保留 Git typed error，实际为 \(error)")
+        }
+    }
+
     func testFetchDisablesRepositoryHooks() async throws {
         let repository = try makeRepository(named: "hooks")
         let evidence = scratch.appendingPathComponent("hook-ran")

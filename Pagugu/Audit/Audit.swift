@@ -1,10 +1,29 @@
 import Foundation
 
 // L3 COORD: Pagugu/Audit/Audit.swift
-// INPUT: 已 durable 的映射变更、Check Run terminal，或已确认 UpdatePlan 的 start/success terminal。
+// INPUT: 已 durable 的映射变更、Check Run terminal，或 Update Run 的 target/plan 与 started/terminal 语义。
 // OUTPUT: 唯一窄 append 入口；写失败 fail-open，不回滚主动作或改变 run outcome。
 // POS: Audit 语义 owner。物理 IO 复用 Persistence。
 // TEST: repo://PaguguTests/RegistryTests.swift、repo://PaguguTests/CheckRunTests.swift。
+
+struct UpdateAuditTarget: Equatable, Sendable {
+    let skillIdentity: UpdateAuditPlan.SkillIdentityValue
+    let checkoutCanonicalPath: String
+    let branchName: String
+    let upstreamRefName: String
+
+    fileprivate var persistenceValue: AuditRecord.UpdateRunTarget {
+        AuditRecord.UpdateRunTarget(
+            skillIdentity: .init(
+                skillSourceKey: skillIdentity.skillSourceKey,
+                repositoryRelativePath: skillIdentity.repositoryRelativePath
+            ),
+            checkoutCanonicalPath: checkoutCanonicalPath,
+            branchName: branchName,
+            upstreamRefName: upstreamRefName
+        )
+    }
+}
 
 struct UpdateAuditPlan: Equatable, Sendable {
     struct SkillIdentityValue: Equatable, Sendable {
@@ -20,6 +39,15 @@ struct UpdateAuditPlan: Equatable, Sendable {
     let targetSHA: String
     let behindCount: Int
     let affectedSkills: [SkillIdentityValue]
+
+    fileprivate var target: UpdateAuditTarget {
+        UpdateAuditTarget(
+            skillIdentity: skillIdentity,
+            checkoutCanonicalPath: checkoutCanonicalPath,
+            branchName: branchName,
+            upstreamRefName: upstreamRefName
+        )
+    }
 
     fileprivate var persistenceValue: AuditRecord.UpdateRunPlan {
         AuditRecord.UpdateRunPlan(
@@ -90,6 +118,41 @@ struct AuditEvidence: Sendable {
             phase: .terminal,
             plan: plan.persistenceValue,
             outcome: .success
+        )
+        try? await persistence.appendAuditEvidence(record)
+    }
+
+    // L4 IN: plan 来自 prepareUpdate 的冻结确认值，且用户尚未确认执行。
+    // OUT: best-effort append terminal-only cancelled；不写 start，不触发 Git 副作用。
+    func recordUpdateCancelled(runID: String, plan: UpdateAuditPlan) async {
+        let record = AuditRecord(
+            id: UUID().uuidString,
+            recordedAt: Date(),
+            updateRunID: runID,
+            phase: .terminal,
+            plan: plan.persistenceValue,
+            outcome: .cancelled
+        )
+        try? await persistence.appendAuditEvidence(record)
+    }
+
+    // L4 IN: reason 必须来自 Runs 的九类稳定集合；确认前允许只有 target，确认后同时带 plan。
+    // OUT: best-effort append terminal failed；不保存原始 Git 输出、exit code 或恢复文案。
+    func recordUpdateFailed(
+        runID: String,
+        target: UpdateAuditTarget,
+        plan: UpdateAuditPlan? = nil,
+        reasonCode: String
+    ) async {
+        let record = AuditRecord(
+            id: UUID().uuidString,
+            recordedAt: Date(),
+            updateRunID: runID,
+            phase: .terminal,
+            target: plan == nil ? target.persistenceValue : nil,
+            plan: plan?.persistenceValue,
+            outcome: .failed,
+            failureReason: reasonCode
         )
         try? await persistence.appendAuditEvidence(record)
     }

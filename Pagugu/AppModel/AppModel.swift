@@ -9,10 +9,36 @@ import Foundation
 // TEST: repo://PaguguTests/AppModelTests.swift（Registry gate、Project Scan Root intent、
 //      目录投影与 intent 路由 smoke）。
 
+enum AppRun: Equatable, Sendable {
+    case check
+    case updatePreparing
+    case updateAwaitingConfirmation
+    case updateExecuting
+    case updateCancelling
+
+    var disabledReason: String {
+        switch self {
+        case .check:
+            return "全量检查正在运行。请等待完成后再发起检查或更新。"
+        case .updatePreparing:
+            return "更新正在重查。请等待重查完成。"
+        case .updateAwaitingConfirmation:
+            return "更新等待确认。请先确认或取消当前更新。"
+        case .updateExecuting:
+            return "更新正在执行。请等待执行完成。"
+        case .updateCancelling:
+            return "正在取消更新。请等待当前操作完成。"
+        }
+    }
+}
+
 enum UpdateResult: Equatable, Sendable {
+    static let cancellationConsequence = "已取消更新。若远端目标已变化，检出会回到“尚未检查”；重新检查后可恢复更新判断。"
+
     case success(checkoutPath: String, targetSHA: String)
     case upToDate
-    case blocked(CheckoutGitState)
+    case cancelled(checkoutPath: String)
+    case failed(UpdateRunFailure)
 }
 
 struct UpdateRefreshFailure: Equatable, Sendable {
@@ -38,6 +64,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var checkRunSummary: CheckRunSummary?
     @Published private(set) var sourceMappingError: SourceMappingError?
     @Published private(set) var pendingUpdatePlan: UpdatePlan?
+    @Published private(set) var activeRun: AppRun?
     @Published private(set) var updateResult: UpdateResult?
     @Published private(set) var updateRefreshFailure: UpdateRefreshFailure?
 
@@ -83,6 +110,7 @@ final class AppModel: ObservableObject {
             readModel = .empty()
             checkScope = []
             pendingUpdatePlan = nil
+            activeRun = nil
         }
     }
 
@@ -209,20 +237,43 @@ final class AppModel: ObservableObject {
     }
 
     var canStartCheckRun: Bool {
-        guard registryReady, registryRecovery == nil, checkRunProgress == nil else { return false }
+        guard registryReady, registryRecovery == nil, activeRun == nil else { return false }
+        if case .complete = readModel.scanOutcome { return true }
+        return false
+    }
+
+    var canStartUpdateRun: Bool {
+        guard registryReady, registryRecovery == nil, activeRun == nil else { return false }
         if case .complete = readModel.scanOutcome { return true }
         return false
     }
 
     var checkRunDisabledReason: String {
-        if checkRunProgress != nil { return "检查正在运行。请等待本次全量检查完成。" }
+        if let activeRun { return activeRun.disabledReason }
+        guard registryReady, registryRecovery == nil else {
+            return "Registry 处于受限恢复模式。请先完成恢复。"
+        }
         if case .complete = readModel.scanOutcome { return "" }
         return "Discovery Scan 不完整。请重新扫描或处理 Scan Issue 后再检查。"
+    }
+
+    var updateRunDisabledReason: String {
+        if let activeRun { return activeRun.disabledReason }
+        guard registryReady, registryRecovery == nil else {
+            return "Registry 处于受限恢复模式。请先完成恢复。"
+        }
+        if case .complete = readModel.scanOutcome { return "" }
+        return "Discovery Scan 不完整。请重新扫描或处理 Scan Issue 后再更新。"
     }
 
     /// MVP 唯一手动检查入口。scope 在调用时复制冻结；run 瞬态不持久。
     func checkNow() async {
         guard canStartCheckRun else { return }
+        activeRun = .check
+        defer {
+            checkRunProgress = nil
+            activeRun = nil
+        }
         let frozenScope = checkScope
         checkRunSummary = nil
         checkItemOutcomes = [:]
@@ -250,7 +301,6 @@ final class AppModel: ObservableObject {
                 await publishDiscovery()
             case .finished(let summary):
                 checkRunSummary = summary
-                checkRunProgress = nil
             }
         }
     }
@@ -272,9 +322,10 @@ final class AppModel: ObservableObject {
 
     // L4 IN: Skill Identity 与 checkoutPath 必须来自当前完整 Read Model 的 Eligible 候选。
     // OUT: 发布 pendingUpdatePlan，或 noop/既有阻断态结果；选择不持久化。
-    // FAIL: stale intent 与 Runs/Git typed error 原样抛给 caller，且不保留计划。
+    // FAIL: stale intent 抛合同错误；运行失败发布稳定 UpdateRunFailure，且不保留计划。
     // TEST: repo://PaguguTests/AppModelTests.swift（候选、计划事实、noop/刷新链路）。
     func prepareUpdate(skillIdentity: SkillIdentity, checkoutPath: String) async throws {
+        guard activeRun == nil else { throw UpdateRunContractError.runInProgress }
         guard eligibleUpdateCheckoutPaths(for: skillIdentity).contains(checkoutPath),
               let source = readModel.sourceItem(for: skillIdentity.sourceKey),
               let card = readModel.checkoutCards(for: source.id).first(where: { $0.id == checkoutPath }) else {
@@ -284,6 +335,7 @@ final class AppModel: ObservableObject {
         guard affectedEntries.contains(where: { $0.id == skillIdentity }) else {
             throw UpdateRunContractError.invalidRequest
         }
+        activeRun = .updatePreparing
         pendingUpdatePlan = nil
         updateResult = nil
         updateRefreshFailure = nil
@@ -303,25 +355,43 @@ final class AppModel: ObservableObject {
             switch preparation {
             case .ready(let plan):
                 pendingUpdatePlan = plan
+                activeRun = .updateAwaitingConfirmation
             case .upToDate:
                 updateResult = .upToDate
+                activeRun = nil
             case .blocked(let state):
-                updateResult = .blocked(state)
+                updateResult = .failed(UpdateRunFailure(
+                    reason: .preconditionChanged,
+                    blockingState: state
+                ))
+                activeRun = nil
             }
+        } catch let failure as UpdateRunFailure {
+            pendingUpdatePlan = nil
+            updateResult = .failed(failure)
+            activeRun = nil
         } catch {
             pendingUpdatePlan = nil
+            activeRun = nil
             throw error
         }
     }
 
     // L4 IN: pendingUpdatePlan 必须仍是用户当前确认的冻结计划。
-    // OUT: 成功结果先发布，再以 post-verify 一次性事实执行完整 Discovery 刷新；刷新失败独立投影。
-    // FAIL: typed error 原样抛给 caller并清空计划；不重试、不回滚。
+    // OUT: 首次 await 前原子转入 executing 并清除可取消 plan；成功结果先发布，再以
+    //      post-verify 一次性事实执行完整 Discovery 刷新；刷新失败独立投影。
+    // FAIL: 运行失败发布稳定 UpdateRunFailure 并清空计划；不重试、不回滚。
     // TEST: repo://PaguguTests/AppModelTests.swift（成功、旧 Observation、刷新失败隔离）。
     func confirmUpdate() async throws {
+        guard activeRun == .updateAwaitingConfirmation else {
+            throw activeRun == nil ? UpdateRunContractError.invalidRequest : .runInProgress
+        }
         guard let plan = pendingUpdatePlan else {
+            activeRun = nil
             throw UpdateRunContractError.invalidRequest
         }
+        activeRun = .updateExecuting
+        pendingUpdatePlan = nil
         let runner = UpdateRunner(
             gitInspector: gitInspector,
             gitExecutor: gitExecutor,
@@ -349,15 +419,47 @@ final class AppModel: ObservableObject {
                     issueCount: readModel.issues.count
                 )
             }
+            activeRun = nil
+        } catch let failure as UpdateRunFailure {
+            pendingUpdatePlan = nil
+            updateResult = .failed(failure)
+            activeRun = nil
         } catch {
             pendingUpdatePlan = nil
+            activeRun = nil
             throw error
         }
+    }
+
+    // L6 CHAIN: 待确认 plan → 首次 await 前转入 cancelling 并清空 plan → terminal-only cancelled
+    //           审计 → 完整事实刷新 → 释放互斥。executing 阶段不可取消。
+    // 取消不写 start、不执行 Git；结果区使用 cancellationConsequence 说明恢复方向。
+    func cancelUpdate() async {
+        guard activeRun == .updateAwaitingConfirmation, let plan = pendingUpdatePlan else { return }
+        activeRun = .updateCancelling
+        pendingUpdatePlan = nil
+        let runner = UpdateRunner(
+            gitInspector: gitInspector,
+            gitExecutor: gitExecutor,
+            audit: audit
+        )
+        await runner.cancelPrepared(plan)
+        pendingUpdatePlan = nil
+        updateResult = .cancelled(checkoutPath: plan.checkoutCanonicalPath)
+        updateRefreshFailure = nil
+        await publishDiscovery()
+        activeRun = nil
     }
 
     func dismissUpdateResult() {
         updateResult = nil
         updateRefreshFailure = nil
+    }
+
+    /// App 退出时只尽力终止当前 Git 子进程；run 不持久、不补写 terminal。
+    /// 已写 start 而未写 terminal 的 Update 审计在重启后按 interrupted-unknown 呈现。
+    func terminateInFlightGitProcesses() {
+        gitExecutor.terminateInFlight()
     }
 
     func addProjectScanRoot(_ url: URL) async {

@@ -8,7 +8,7 @@ import Foundation
 // TEST: repo://PaguguTests/PersistenceTests.swift、repo://PaguguTests/CheckRunTests.swift。
 
 // L5 PARAM: Registry/Audit schemaVersion 当前只接受 1；Audit FIFO 上限 200。
-// Audit action 为 source-mapping / check-run / update-run；Update start 无 outcome，success terminal 有 outcome。
+// Audit action 为 source-mapping / check-run / update-run；Update start 无 outcome，terminal 使用 success/cancelled/failed。
 // Registry 顶层恰好编码三类集合；未知字段可忽略且重写不保留。
 // PAIR: CheckoutObservation success 必须有 remoteTipSHA；failure 必须没有。
 // FAIL: 缺字段、类型不符、路径/身份配对无效均走损坏 quarantine。
@@ -128,6 +128,7 @@ struct AuditRecord: Codable, Equatable, Sendable {
         case partial
         case failed
         case success
+        case cancelled
     }
 
     enum UpdateRunPhase: String, Codable, Equatable, Sendable {
@@ -157,6 +158,19 @@ struct AuditRecord: Codable, Equatable, Sendable {
         }
     }
 
+    struct UpdateRunTarget: Codable, Equatable, Sendable {
+        let skillIdentity: SkillIdentitySnapshot
+        let checkoutCanonicalPath: String
+        let branchName: String
+        let upstreamRefName: String
+
+        fileprivate var isValid: Bool {
+            skillIdentity.isValid &&
+                isNormalizedAbsolutePath(checkoutCanonicalPath) &&
+                !branchName.isEmpty && !upstreamRefName.isEmpty
+        }
+    }
+
     struct UpdateRunPlan: Codable, Equatable, Sendable {
         let skillIdentity: SkillIdentitySnapshot
         let checkoutCanonicalPath: String
@@ -166,6 +180,15 @@ struct AuditRecord: Codable, Equatable, Sendable {
         let targetSHA: String
         let behindCount: Int
         let affectedSkills: [SkillIdentitySnapshot]
+
+        fileprivate var target: UpdateRunTarget {
+            UpdateRunTarget(
+                skillIdentity: skillIdentity,
+                checkoutCanonicalPath: checkoutCanonicalPath,
+                branchName: branchName,
+                upstreamRefName: upstreamRefName
+            )
+        }
 
         fileprivate var isValid: Bool {
             skillIdentity.isValid &&
@@ -189,7 +212,9 @@ struct AuditRecord: Codable, Equatable, Sendable {
     let checkRunScope: CheckRunScope?
     let updateRunID: String?
     let updateRunPhase: UpdateRunPhase?
+    let updateRunTarget: UpdateRunTarget?
     let updateRunPlan: UpdateRunPlan?
+    let updateFailureReason: String?
 
     init(
         id: String,
@@ -207,7 +232,9 @@ struct AuditRecord: Codable, Equatable, Sendable {
         self.checkRunScope = nil
         self.updateRunID = nil
         self.updateRunPhase = nil
+        self.updateRunTarget = nil
         self.updateRunPlan = nil
+        self.updateFailureReason = nil
     }
 
     init(
@@ -225,7 +252,9 @@ struct AuditRecord: Codable, Equatable, Sendable {
         self.checkRunScope = checkRunScope
         self.updateRunID = nil
         self.updateRunPhase = nil
+        self.updateRunTarget = nil
         self.updateRunPlan = nil
+        self.updateFailureReason = nil
     }
 
     init(
@@ -233,8 +262,10 @@ struct AuditRecord: Codable, Equatable, Sendable {
         recordedAt: Date,
         updateRunID: String,
         phase: UpdateRunPhase,
-        plan: UpdateRunPlan,
-        outcome: Outcome? = nil
+        target: UpdateRunTarget? = nil,
+        plan: UpdateRunPlan? = nil,
+        outcome: Outcome? = nil,
+        failureReason: String? = nil
     ) {
         self.id = id
         self.recordedAt = recordedAt
@@ -245,7 +276,9 @@ struct AuditRecord: Codable, Equatable, Sendable {
         self.checkRunScope = nil
         self.updateRunID = updateRunID
         self.updateRunPhase = phase
+        self.updateRunTarget = target
         self.updateRunPlan = plan
+        self.updateFailureReason = failureReason
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -258,7 +291,9 @@ struct AuditRecord: Codable, Equatable, Sendable {
         case checkRunScope
         case updateRunID
         case updateRunPhase
+        case updateRunTarget
         case updateRunPlan
+        case updateFailureReason
     }
 
     init(from decoder: Decoder) throws {
@@ -274,7 +309,9 @@ struct AuditRecord: Codable, Equatable, Sendable {
         checkRunScope = try container.decodeIfPresent(CheckRunScope.self, forKey: .checkRunScope)
         updateRunID = try container.decodeIfPresent(String.self, forKey: .updateRunID)
         updateRunPhase = try container.decodeIfPresent(UpdateRunPhase.self, forKey: .updateRunPhase)
+        updateRunTarget = try container.decodeIfPresent(UpdateRunTarget.self, forKey: .updateRunTarget)
         updateRunPlan = try container.decodeIfPresent(UpdateRunPlan.self, forKey: .updateRunPlan)
+        updateFailureReason = try container.decodeIfPresent(String.self, forKey: .updateFailureReason)
         action = try container.decodeIfPresent(Action.self, forKey: .action) ?? .sourceMapping
     }
 
@@ -286,7 +323,8 @@ struct AuditRecord: Codable, Equatable, Sendable {
                   let installationCanonicalPath,
                   let target,
                   checkRunScope == nil,
-                  updateRunID == nil, updateRunPhase == nil, updateRunPlan == nil else { return false }
+                  updateRunID == nil, updateRunPhase == nil, updateRunTarget == nil,
+                  updateRunPlan == nil, updateFailureReason == nil else { return false }
             return isNormalizedAbsolutePath(installationCanonicalPath) &&
                 isNormalizedSkillSourceKey(target.skillSourceKey) &&
                 isNormalizedRelativePath(target.repositoryRelativePath)
@@ -296,7 +334,8 @@ struct AuditRecord: Codable, Equatable, Sendable {
                   target == nil,
                   let checkRunScope,
                   checkRunScope.isValid,
-                  updateRunID == nil, updateRunPhase == nil, updateRunPlan == nil else { return false }
+                  updateRunID == nil, updateRunPhase == nil, updateRunTarget == nil,
+                  updateRunPlan == nil, updateFailureReason == nil else { return false }
             switch outcome {
             case .complete:
                 return checkRunScope.failedCount == 0
@@ -304,18 +343,29 @@ struct AuditRecord: Codable, Equatable, Sendable {
                 return checkRunScope.succeededCount > 0 && checkRunScope.failedCount > 0
             case .failed:
                 return checkRunScope.succeededCount == 0 && checkRunScope.failedCount > 0
-            case .created, .deleted, .success:
+            case .created, .deleted, .success, .cancelled:
                 return false
             }
         case .updateRun:
             guard installationCanonicalPath == nil, target == nil, checkRunScope == nil,
                   let updateRunID, !updateRunID.isEmpty,
-                  let updateRunPhase, let updateRunPlan, updateRunPlan.isValid else { return false }
+                  let updateRunPhase,
+                  updateRunTarget?.isValid ?? true,
+                  updateRunPlan?.isValid ?? true,
+                  updateRunTarget == nil || updateRunPlan == nil || updateRunTarget == updateRunPlan?.target,
+                  updateRunTarget != nil || updateRunPlan != nil else { return false }
             switch updateRunPhase {
             case .started:
-                return outcome == nil
+                return outcome == nil && updateRunPlan != nil && updateFailureReason == nil
             case .terminal:
-                return outcome == .success
+                switch outcome {
+                case .success, .cancelled:
+                    return updateRunPlan != nil && updateFailureReason == nil
+                case .failed:
+                    return updateFailureReason.map(isNormalizedReasonCode) ?? false
+                case .none, .created, .deleted, .complete, .partial:
+                    return false
+                }
             }
         }
     }
@@ -370,6 +420,11 @@ private func isNormalizedRelativePath(_ path: String) -> Bool {
 
 private func isFullGitSHA(_ value: String) -> Bool {
     [40, 64].contains(value.count) && value.allSatisfy(\.isHexDigit)
+}
+
+private func isNormalizedReasonCode(_ value: String) -> Bool {
+    !value.isEmpty && value.first != "-" && value.last != "-" &&
+        !value.contains("--") && value.allSatisfy { $0.isLowercase || $0 == "-" }
 }
 
 private func isNormalizedSkillSourceKey(_ value: String) -> Bool {

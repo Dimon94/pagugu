@@ -339,6 +339,24 @@ final class CheckRunTests: XCTestCase {
         ))
     }
 
+    func testEveryUpdateFailureHasStableCodeChineseNameAndRecoveryDirection() {
+        XCTAssertEqual(
+            UpdateRunFailureReason.allCases.map(\.rawValue),
+            [
+                "lock-busy", "identity-changed", "fetch-failure", "precondition-changed",
+                "tip-changed", "ff-rejected", "command-failure", "verification-failed",
+                "interrupted-unknown",
+            ]
+        )
+        for reason in UpdateRunFailureReason.allCases {
+            XCTAssertFalse(reason.displayName.isEmpty)
+            XCTAssertFalse(reason.recoveryDirection.isEmpty)
+        }
+        XCTAssertTrue(
+            UpdateRunFailureReason.tipChanged.recoveryDirection.contains("重新发起更新")
+        )
+    }
+
     func testPrepareUpdateReturnsNoPlanForNoopOrBlockingRecheckState() async throws {
         let path = "/checkout"
         let sourceKey = SkillSourceKey.remoteURL("example.com/team/skills")
@@ -381,7 +399,90 @@ final class CheckRunTests: XCTestCase {
         ))
         XCTAssertEqual(blocked, .blocked(.dirty))
         let audit = await persistence.loadAuditEvidence()
-        XCTAssertTrue(audit.records.isEmpty, "确认前 noop/阻断不得写 start")
+        XCTAssertEqual(audit.records.count, 1, "确认前阻断只写 terminal failed，不得写 start")
+        XCTAssertEqual(audit.records.first?.updateRunPhase, .terminal)
+        XCTAssertEqual(audit.records.first?.outcome, .failed)
+        XCTAssertEqual(
+            audit.records.first?.updateFailureReason,
+            UpdateRunFailureReason.preconditionChanged.rawValue
+        )
+        XCTAssertNil(audit.records.first?.updateRunPlan)
+    }
+
+    func testCancelPreparedWritesTerminalOnlyCancelledAuditWithFrozenPlan() async throws {
+        let path = "/checkout"
+        let sourceKey = SkillSourceKey.remoteURL("example.com/team/skills")
+        let identity = SkillIdentity(sourceKey: sourceKey, repositoryRelativePath: "skills/one")
+        let oldHead = String(repeating: "a", count: 40)
+        let targetSHA = String(repeating: "b", count: 40)
+        let requestFacts = facts(
+            path: path,
+            headSHA: oldHead,
+            remoteTipSHA: targetSHA,
+            relativePosition: .behindOnly(1)
+        )
+        let client = FakeGitClient(factsAfterFetch: [path: requestFacts])
+        let persistence = Persistence(directoryURL: temporaryDirectory.appendingPathComponent("cancel-data"))
+        let runner = UpdateRunner(
+            gitInspector: client,
+            gitExecutor: client,
+            audit: AuditEvidence(persistence: persistence)
+        )
+        let preparation = try await runner.prepareUpdate(request: UpdateRunRequest(
+            skillIdentity: identity,
+            target: CheckRunTarget(sourceKey: sourceKey, facts: requestFacts),
+            affectedSkills: [UpdateAffectedSkill(identity: identity, displayName: "One")]
+        ))
+        guard case .ready(let plan) = preparation else { return XCTFail("预期确认计划") }
+
+        await runner.cancelPrepared(plan)
+
+        let audit = await persistence.loadAuditEvidence()
+        XCTAssertEqual(audit.records.count, 1)
+        XCTAssertEqual(audit.records.first?.updateRunID, plan.runID)
+        XCTAssertEqual(audit.records.first?.updateRunPhase, .terminal)
+        XCTAssertEqual(audit.records.first?.outcome, .cancelled)
+        XCTAssertNil(audit.records.first?.updateFailureReason)
+        XCTAssertEqual(audit.records.first?.updateRunPlan?.targetSHA, targetSHA)
+    }
+
+    func testPrepareUpdateClassifiesFetchFailureAndWritesTerminalOnlyAudit() async throws {
+        let path = "/checkout"
+        let sourceKey = SkillSourceKey.remoteURL("example.com/team/skills")
+        let identity = SkillIdentity(sourceKey: sourceKey, repositoryRelativePath: "skills/one")
+        let requestFacts = facts(
+            path: path,
+            headSHA: String(repeating: "a", count: 40),
+            remoteTipSHA: String(repeating: "b", count: 40),
+            relativePosition: .behindOnly(1)
+        )
+        let client = FakeGitClient(factsAfterFetch: [path: requestFacts], fetchFailures: [path])
+        let persistence = Persistence(directoryURL: temporaryDirectory.appendingPathComponent("fetch-failure-data"))
+        let runner = UpdateRunner(
+            gitInspector: client,
+            gitExecutor: client,
+            audit: AuditEvidence(persistence: persistence)
+        )
+
+        do {
+            _ = try await runner.prepareUpdate(request: UpdateRunRequest(
+                skillIdentity: identity,
+                target: CheckRunTarget(sourceKey: sourceKey, facts: requestFacts),
+                affectedSkills: [UpdateAffectedSkill(identity: identity, displayName: "One")]
+            ))
+            XCTFail("fetch 失败必须归一化")
+        } catch let failure as UpdateRunFailure {
+            XCTAssertEqual(failure.reason, .fetchFailure)
+        } catch {
+            XCTFail("fetch 失败必须返回稳定失败类，实际为 \(error)")
+        }
+
+        let audit = await persistence.loadAuditEvidence()
+        XCTAssertEqual(audit.records.count, 1)
+        XCTAssertEqual(audit.records.first?.updateRunPhase, .terminal)
+        XCTAssertEqual(audit.records.first?.outcome, .failed)
+        XCTAssertEqual(audit.records.first?.updateFailureReason, "fetch-failure")
+        XCTAssertNil(audit.records.first?.updateRunPlan)
     }
 
     func testExecuteConfirmedFailsClosedWhenHeadDriftsBeforeFastForward() async throws {
@@ -437,14 +538,20 @@ final class CheckRunTests: XCTestCase {
         do {
             _ = try await runner.executeConfirmed(plan)
             XCTFail("确认后 HEAD 漂移必须 fail closed")
-        } catch let error as UpdateRunContractError {
-            XCTAssertEqual(error, .preconditionChanged)
-            XCTAssertFalse(error.recoveryDirection.isEmpty)
+        } catch let failure as UpdateRunFailure {
+            XCTAssertEqual(failure.reason, .preconditionChanged)
+            XCTAssertFalse(failure.recoveryDirection.isEmpty)
         } catch {
-            XCTFail("HEAD 漂移必须保留稳定 typed error，实际为 \(error)")
+            XCTFail("HEAD 漂移必须保留稳定 typed failure，实际为 \(error)")
         }
         let fastForwardCount = await git.fastForwardCount
         XCTAssertEqual(fastForwardCount, 0)
+        let audit = await Persistence(
+            directoryURL: temporaryDirectory.appendingPathComponent("drift-data")
+        ).loadAuditEvidence()
+        XCTAssertEqual(audit.records.map(\.updateRunPhase), [.started, .terminal])
+        XCTAssertEqual(audit.records.last?.outcome, .failed)
+        XCTAssertEqual(audit.records.last?.updateFailureReason, "precondition-changed")
     }
 
     func testPostVerifyRejectsSuccessWhenSiblingConflictAppears() async throws {
@@ -502,16 +609,227 @@ final class CheckRunTests: XCTestCase {
         do {
             _ = try await runner.executeConfirmed(plan)
             XCTFail("post-verify 状态不是 up-to-date 时不得写成功")
-        } catch let error as UpdateRunContractError {
-            XCTAssertEqual(error, .verificationFailed)
+        } catch let failure as UpdateRunFailure {
+            XCTAssertEqual(failure.reason, .verificationFailed)
         } catch {
-            XCTFail("post-verify 必须返回稳定 typed error，实际为 \(error)")
+            XCTFail("post-verify 必须返回稳定 typed failure，实际为 \(error)")
         }
         let fastForwardCount = await git.fastForwardCount
         XCTAssertEqual(fastForwardCount, 1)
         let audit = await persistence.loadAuditEvidence()
-        XCTAssertEqual(audit.records.map(\.updateRunPhase), [.started])
+        XCTAssertEqual(audit.records.map(\.updateRunPhase), [.started, .terminal])
         XCTAssertNil(audit.records.first?.outcome)
+        XCTAssertEqual(audit.records.last?.outcome, .failed)
+        XCTAssertEqual(audit.records.last?.updateFailureReason, "verification-failed")
+    }
+
+    func testUpdateRunScratchClassifiesOccupiedIndexLockWithoutMovingHeadOrRetrying() async throws {
+        let repository = try makeUpdateRepository(named: "update-lock-busy")
+        let client = GitClient()
+        try await client.fetch(remote: "origin", upstreamRef: "origin/main", at: repository.checkout.path)
+        let entranceFacts = await client.inspectCheckout(
+            at: repository.checkout.path,
+            scope: .afterSuccessfulCheck
+        )
+        let sourceKey = try XCTUnwrap(SkillSourceKey.normalize(remoteURL: repository.remoteURL))
+        let identity = SkillIdentity(sourceKey: sourceKey, repositoryRelativePath: "skills/one")
+        let persistence = Persistence(directoryURL: temporaryDirectory.appendingPathComponent("lock-data"))
+        let runner = UpdateRunner(
+            gitInspector: client,
+            gitExecutor: client,
+            audit: AuditEvidence(persistence: persistence)
+        )
+        let preparation = try await runner.prepareUpdate(request: UpdateRunRequest(
+            skillIdentity: identity,
+            target: CheckRunTarget(sourceKey: sourceKey, facts: entranceFacts),
+            affectedSkills: [UpdateAffectedSkill(identity: identity, displayName: "One")]
+        ))
+        guard case .ready(let plan) = preparation else { return XCTFail("预期确认计划") }
+        let lock = try updateGitPath("index.lock", in: repository.checkout)
+        try Data().write(to: lock)
+        defer { try? FileManager.default.removeItem(at: lock) }
+
+        do {
+            _ = try await runner.executeConfirmed(plan)
+            XCTFail("外部 index.lock 必须阻止更新")
+        } catch let failure as UpdateRunFailure {
+            XCTAssertEqual(failure.reason, .lockBusy)
+        } catch {
+            XCTFail("锁冲突必须返回稳定失败类，实际为 \(error)")
+        }
+
+        XCTAssertEqual(
+            try updateGit(["rev-parse", "HEAD"], at: repository.checkout)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            plan.currentHeadSHA
+        )
+        XCTAssertEqual(try updateGit(["status", "--porcelain"], at: repository.checkout), "")
+        let audit = await persistence.loadAuditEvidence()
+        XCTAssertEqual(audit.records.map(\.updateRunPhase), [.started, .terminal])
+        XCTAssertEqual(audit.records.last?.updateFailureReason, "lock-busy")
+        let bytes = try Data(
+            contentsOf: temporaryDirectory.appendingPathComponent("lock-data/audit-history.json")
+        )
+        let json = String(decoding: bytes, as: UTF8.self)
+        XCTAssertFalse(json.contains("index.lock"), "审计不得持久化原始 Git 错误")
+        XCTAssertFalse(json.contains("stderr"))
+        XCTAssertFalse(json.contains("exitCode"))
+    }
+
+    func testUpdateRunScratchClassifiesInstantDivergenceAsFastForwardRejectedWithoutRollback() async throws {
+        let repository = try makeUpdateRepository(named: "update-ff-rejected")
+        let client = GitClient()
+        try await client.fetch(remote: "origin", upstreamRef: "origin/main", at: repository.checkout.path)
+        let entranceFacts = await client.inspectCheckout(
+            at: repository.checkout.path,
+            scope: .afterSuccessfulCheck
+        )
+        let sourceKey = try XCTUnwrap(SkillSourceKey.normalize(remoteURL: repository.remoteURL))
+        let identity = SkillIdentity(sourceKey: sourceKey, repositoryRelativePath: "skills/one")
+        let executor = RacingUpdateGitExecutor(
+            client: client,
+            checkout: repository.checkout,
+            intervention: .divergeBeforeFastForward
+        )
+        let persistence = Persistence(directoryURL: temporaryDirectory.appendingPathComponent("ff-rejected-data"))
+        let runner = UpdateRunner(
+            gitInspector: client,
+            gitExecutor: executor,
+            audit: AuditEvidence(persistence: persistence)
+        )
+        let preparation = try await runner.prepareUpdate(request: UpdateRunRequest(
+            skillIdentity: identity,
+            target: CheckRunTarget(sourceKey: sourceKey, facts: entranceFacts),
+            affectedSkills: [UpdateAffectedSkill(identity: identity, displayName: "One")]
+        ))
+        guard case .ready(let plan) = preparation else { return XCTFail("预期确认计划") }
+
+        do {
+            _ = try await runner.executeConfirmed(plan)
+            XCTFail("执行瞬间分叉必须拒绝 ff-only")
+        } catch let failure as UpdateRunFailure {
+            XCTAssertEqual(failure.reason, .fastForwardRejected)
+        } catch {
+            XCTFail("分叉必须返回稳定失败类，实际为 \(error)")
+        }
+
+        let currentFacts = await client.inspectCheckout(
+            at: repository.checkout.path,
+            scope: .afterSuccessfulCheck
+        )
+        guard case .diverged = currentFacts.relativePosition else {
+            return XCTFail("外部分叉事实必须保留，实际为 \(currentFacts.relativePosition)")
+        }
+        XCTAssertFalse(currentFacts.dirty.isDirty)
+        XCTAssertNotEqual(currentFacts.head?.sha, plan.targetSHA, "Pagugu 不得自动回滚外部提交")
+        let fastForwardCount = await executor.fastForwardCount
+        XCTAssertEqual(fastForwardCount, 1, "失败不得自动重试")
+        let audit = await persistence.loadAuditEvidence()
+        XCTAssertEqual(audit.records.last?.updateFailureReason, "ff-rejected")
+    }
+
+    func testUpdateRunScratchClassifiesIncompletePostVerifyAfterExitZeroWithoutRollback() async throws {
+        let repository = try makeUpdateRepository(named: "update-verification-failed")
+        let client = GitClient()
+        try await client.fetch(remote: "origin", upstreamRef: "origin/main", at: repository.checkout.path)
+        let entranceFacts = await client.inspectCheckout(
+            at: repository.checkout.path,
+            scope: .afterSuccessfulCheck
+        )
+        let sourceKey = try XCTUnwrap(SkillSourceKey.normalize(remoteURL: repository.remoteURL))
+        let identity = SkillIdentity(sourceKey: sourceKey, repositoryRelativePath: "skills/one")
+        let executor = RacingUpdateGitExecutor(
+            client: client,
+            checkout: repository.checkout,
+            intervention: .dirtyAfterSuccessfulFastForward
+        )
+        let persistence = Persistence(directoryURL: temporaryDirectory.appendingPathComponent("verification-data"))
+        let runner = UpdateRunner(
+            gitInspector: client,
+            gitExecutor: executor,
+            audit: AuditEvidence(persistence: persistence)
+        )
+        let preparation = try await runner.prepareUpdate(request: UpdateRunRequest(
+            skillIdentity: identity,
+            target: CheckRunTarget(sourceKey: sourceKey, facts: entranceFacts),
+            affectedSkills: [UpdateAffectedSkill(identity: identity, displayName: "One")]
+        ))
+        guard case .ready(let plan) = preparation else { return XCTFail("预期确认计划") }
+
+        do {
+            _ = try await runner.executeConfirmed(plan)
+            XCTFail("ff exit 0 但 post-verify 不全时必须失败")
+        } catch let failure as UpdateRunFailure {
+            XCTAssertEqual(failure.reason, .verificationFailed)
+        } catch {
+            XCTFail("post-verify 必须返回稳定失败类，实际为 \(error)")
+        }
+
+        XCTAssertEqual(
+            try updateGit(["rev-parse", "HEAD"], at: repository.checkout)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            plan.targetSHA,
+            "已完成的 ff 不得因验证失败自动回滚"
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: repository.checkout.appendingPathComponent("external-residue.txt").path
+            ),
+            "外部残留必须保留给实时 Git Fact 呈现"
+        )
+        let fastForwardCount = await executor.fastForwardCount
+        XCTAssertEqual(fastForwardCount, 1, "验证失败不得自动重试")
+        let audit = await persistence.loadAuditEvidence()
+        XCTAssertEqual(audit.records.last?.updateFailureReason, "verification-failed")
+    }
+
+    func testUpdateRunScratchClassifiesTipChangeAfterConfirmationWithoutMovingHead() async throws {
+        let repository = try makeUpdateRepository(named: "update-tip-changed")
+        let client = GitClient()
+        try await client.fetch(remote: "origin", upstreamRef: "origin/main", at: repository.checkout.path)
+        let entranceFacts = await client.inspectCheckout(
+            at: repository.checkout.path,
+            scope: .afterSuccessfulCheck
+        )
+        let sourceKey = try XCTUnwrap(SkillSourceKey.normalize(remoteURL: repository.remoteURL))
+        let identity = SkillIdentity(sourceKey: sourceKey, repositoryRelativePath: "skills/one")
+        let persistence = Persistence(directoryURL: temporaryDirectory.appendingPathComponent("tip-data"))
+        let runner = UpdateRunner(
+            gitInspector: client,
+            gitExecutor: client,
+            audit: AuditEvidence(persistence: persistence)
+        )
+        let preparation = try await runner.prepareUpdate(request: UpdateRunRequest(
+            skillIdentity: identity,
+            target: CheckRunTarget(sourceKey: sourceKey, facts: entranceFacts),
+            affectedSkills: [UpdateAffectedSkill(identity: identity, displayName: "One")]
+        ))
+        guard case .ready(let plan) = preparation else { return XCTFail("预期确认计划") }
+
+        try writeUpdateFile("second remote advance", to: repository.peer.appendingPathComponent("tracked.txt"))
+        try updateGit(["add", "tracked.txt"], at: repository.peer)
+        try updateGit(["commit", "-m", "second remote advance"], at: repository.peer)
+        try updateGit(["push", "origin", "main"], at: repository.peer)
+        try await client.fetch(remote: "origin", upstreamRef: "origin/main", at: repository.checkout.path)
+
+        do {
+            _ = try await runner.executeConfirmed(plan)
+            XCTFail("确认后 remote tip 漂移必须 fail closed")
+        } catch let failure as UpdateRunFailure {
+            XCTAssertEqual(failure.reason, .tipChanged)
+            XCTAssertTrue(failure.recoveryDirection.contains("重新发起更新"))
+        } catch {
+            XCTFail("tip 漂移必须返回稳定失败类，实际为 \(error)")
+        }
+
+        XCTAssertEqual(
+            try updateGit(["rev-parse", "HEAD"], at: repository.checkout)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            plan.currentHeadSHA
+        )
+        XCTAssertEqual(try updateGit(["status", "--porcelain"], at: repository.checkout), "")
+        let audit = await persistence.loadAuditEvidence()
+        XCTAssertEqual(audit.records.last?.updateFailureReason, "tip-changed")
     }
 
     func testUpdateRunScratchSuccessBindsExactPlanFastForwardsOneCheckoutAndWritesTwoAuditRecords() async throws {
@@ -595,6 +913,7 @@ final class CheckRunTests: XCTestCase {
 
     private func facts(
         path: String,
+        headSHA: String = "head",
         remoteURL: String? = "https://example.com/team/skills.git",
         upstream: GitUpstream? = GitUpstream(
             ref: "origin/main",
@@ -607,7 +926,7 @@ final class CheckRunTests: XCTestCase {
         CheckoutGitFacts(
             checkoutPath: path,
             gitCommonDirectory: path + "/.git",
-            head: .branch(name: "main", sha: "head"),
+            head: .branch(name: "main", sha: headSHA),
             originRemoteURL: remoteURL,
             upstream: upstream.map {
                 GitUpstream(ref: $0.ref, remoteName: $0.remoteName, remoteURL: $0.remoteURL, sha: remoteTipSHA)
@@ -648,6 +967,7 @@ final class CheckRunTests: XCTestCase {
 
     private struct UpdateRepository {
         let checkout: URL
+        let peer: URL
         let remoteURL: String
     }
 
@@ -677,7 +997,7 @@ final class CheckRunTests: XCTestCase {
         try updateGit(["add", "tracked.txt"], at: peer)
         try updateGit(["commit", "-m", "remote advance"], at: peer)
         try updateGit(["push", "origin", "main"], at: peer)
-        return UpdateRepository(checkout: checkout, remoteURL: remoteURL)
+        return UpdateRepository(checkout: checkout, peer: peer, remoteURL: remoteURL)
     }
 
     private func updateGitPath(_ name: String, in repository: URL) throws -> URL {
@@ -714,6 +1034,70 @@ final class CheckRunTests: XCTestCase {
     private func writeUpdateFile(_ value: String, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(value.utf8).write(to: url)
+    }
+
+    private actor RacingUpdateGitExecutor: GitExecuting {
+        enum Intervention: Sendable {
+            case divergeBeforeFastForward
+            case dirtyAfterSuccessfulFastForward
+        }
+
+        let client: GitClient
+        let checkout: URL
+        let intervention: Intervention
+        private(set) var fastForwardCount = 0
+
+        init(client: GitClient, checkout: URL, intervention: Intervention) {
+            self.client = client
+            self.checkout = checkout
+            self.intervention = intervention
+        }
+
+        func fetch(remote: String, upstreamRef: String, at checkoutPath: String) async throws {
+            try await client.fetch(remote: remote, upstreamRef: upstreamRef, at: checkoutPath)
+        }
+
+        func fastForward(to targetSHA: String, at checkoutPath: String) async throws {
+            fastForwardCount += 1
+            switch intervention {
+            case .divergeBeforeFastForward:
+                try Self.write("external local advance", to: checkout.appendingPathComponent("tracked.txt"))
+                try Self.git(["add", "tracked.txt"], at: checkout)
+                try Self.git(["commit", "-m", "external local advance"], at: checkout)
+                try await client.fastForward(to: targetSHA, at: checkoutPath)
+            case .dirtyAfterSuccessfulFastForward:
+                try await client.fastForward(to: targetSHA, at: checkoutPath)
+                try Self.write("external residue", to: checkout.appendingPathComponent("external-residue.txt"))
+            }
+        }
+
+        private static func git(_ arguments: [String], at directory: URL) throws {
+            let process = Process()
+            let error = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            process.arguments = arguments
+            process.currentDirectoryURL = directory
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = error
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else {
+                let stderr = String(
+                    decoding: error.fileHandleForReading.readDataToEndOfFile(),
+                    as: UTF8.self
+                )
+                throw NSError(
+                    domain: "RacingUpdateGitExecutor",
+                    code: Int(process.terminationStatus),
+                    userInfo: [NSLocalizedDescriptionKey: stderr]
+                )
+            }
+        }
+
+        private static func write(_ value: String, to url: URL) throws {
+            try Data(value.utf8).write(to: url)
+        }
     }
 
     private actor SequencedUpdateGitClient: GitInspecting, GitExecuting {

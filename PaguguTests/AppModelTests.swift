@@ -892,6 +892,51 @@ final class AppModelTests: XCTestCase {
     }
 
     @MainActor
+    func testCheckRunMutexDisablesBothRunEntrancesUntilTheRunFinishes() async throws {
+        let repo = tmp.appendingPathComponent("check-mutex-repo")
+        try makeWorkTree(at: repo)
+        try writeSkill(at: repo.appendingPathComponent("skills/one"), name: "One")
+        let remoteURL = "https://example.com/team/check-mutex.git"
+        let initial = checkoutFacts(path: repo.path, remoteURL: remoteURL)
+        let checked = updateFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            headSHA: String(repeating: "a", count: 40),
+            remoteTipSHA: String(repeating: "b", count: 40),
+            relativePosition: .behindOnly(1)
+        )
+        let git = BlockingCheckGitClient(initial: initial, checked: checked)
+        let model = AppModel(
+            personalRoots: [repo.path],
+            persistence: Persistence(directoryURL: tmp.appendingPathComponent("check-mutex-data")),
+            gitInspector: git,
+            gitExecutor: git
+        )
+        await model.start()
+        let selected = try XCTUnwrap(model.readModel.sources.first?.skills.first?.id)
+        let checkTask = Task { await model.checkNow() }
+        await git.waitUntilFetchStarts()
+
+        XCTAssertEqual(model.activeRun, .check)
+        XCTAssertFalse(model.canStartCheckRun)
+        XCTAssertFalse(model.canStartUpdateRun)
+        XCTAssertTrue(model.checkRunDisabledReason.contains("检查"))
+        XCTAssertTrue(model.updateRunDisabledReason.contains("检查"))
+        do {
+            try await model.prepareUpdate(skillIdentity: selected, checkoutPath: repo.path)
+            XCTFail("Check Run 中不得启动 Update Run")
+        } catch let error as UpdateRunContractError {
+            XCTAssertEqual(error, .runInProgress)
+        }
+
+        await git.finishFetch()
+        await checkTask.value
+        XCTAssertNil(model.activeRun)
+        XCTAssertTrue(model.canStartCheckRun)
+        XCTAssertTrue(model.canStartUpdateRun)
+    }
+
+    @MainActor
     func testUpdateIntentsExposeTransientCheckoutChoiceConfirmExactPlanAndRefreshToUpToDate() async throws {
         let repo = tmp.appendingPathComponent("update-repo")
         try makeWorkTree(at: repo)
@@ -950,7 +995,8 @@ final class AppModelTests: XCTestCase {
             localFacts: localFacts,
             checkedFacts: checkedFacts,
             updatedLocalFacts: updatedLocalFacts,
-            updatedFacts: updatedFacts
+            updatedFacts: updatedFacts,
+            blockFastForward: true
         )
         let model = AppModel(
             personalRoots: [repo.path],
@@ -969,10 +1015,32 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(plan.targetSHA, target)
         XCTAssertEqual(plan.affectedSkills.map(\.displayName), ["One", "Two"])
         XCTAssertNil(model.updateResult)
+        XCTAssertEqual(model.activeRun, .updateAwaitingConfirmation)
+        XCTAssertFalse(model.canStartCheckRun)
+        XCTAssertFalse(model.canStartUpdateRun)
+        XCTAssertTrue(model.checkRunDisabledReason.contains("更新"))
+        XCTAssertTrue(model.updateRunDisabledReason.contains("更新"))
 
-        try await model.confirmUpdate()
+        let confirmTask = Task { try await model.confirmUpdate() }
+        await git.waitUntilFastForwardStarts()
+        XCTAssertEqual(model.activeRun, .updateExecuting)
+        XCTAssertNil(model.pendingUpdatePlan, "确认后必须在首次 await 前关闭取消入口")
+        await model.cancelUpdate()
+        XCTAssertEqual(model.activeRun, .updateExecuting, "执行中的更新不得被取消或替换")
+        XCTAssertNil(model.updateResult)
+        do {
+            try await model.prepareUpdate(skillIdentity: selected, checkoutPath: repo.path)
+            XCTFail("执行中的 Update Run 不得启动第二个 Update Run")
+        } catch let error as UpdateRunContractError {
+            XCTAssertEqual(error, .runInProgress)
+        }
+        let inFlightAudit = await Persistence(directoryURL: dataDirectory).loadAuditEvidence()
+        XCTAssertEqual(inFlightAudit.records.map(\.updateRunPhase), [.started])
+        await git.finishFastForward()
+        try await confirmTask.value
 
         XCTAssertNil(model.pendingUpdatePlan)
+        XCTAssertNil(model.activeRun)
         XCTAssertEqual(model.updateResult, .success(checkoutPath: repo.path, targetSHA: target))
         XCTAssertNil(model.updateRefreshFailure)
         let refreshedCard = try XCTUnwrap(model.readModel.checkoutCards(for: source.id).first)
@@ -983,6 +1051,110 @@ final class AppModelTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(postUpdateRefreshCount, 1, "成功后必须触发完整 Discovery 刷新")
         let audit = await Persistence(directoryURL: dataDirectory).loadAuditEvidence()
         XCTAssertEqual(audit.records.map(\.updateRunID), [plan.runID, plan.runID])
+    }
+
+    @MainActor
+    func testCancelUpdateReleasesMutexRefreshesToCheckUnknownAndWritesCancelledAudit() async throws {
+        let repo = tmp.appendingPathComponent("cancel-update-repo")
+        try makeWorkTree(at: repo)
+        try writeSkill(at: repo.appendingPathComponent("skills/one"), name: "One")
+        let remoteURL = "https://example.com/team/cancel-update.git"
+        let sourceKey = SkillSourceKey.remoteURL("example.com/team/cancel-update")
+        let oldHead = String(repeating: "1", count: 40)
+        let observedTip = String(repeating: "2", count: 40)
+        let preparedTip = String(repeating: "3", count: 40)
+        let localFacts = updateFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            headSHA: oldHead,
+            remoteTipSHA: observedTip,
+            relativePosition: .unknown
+        )
+        let checkedFacts = updateFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            headSHA: oldHead,
+            remoteTipSHA: observedTip,
+            relativePosition: .behindOnly(1)
+        )
+        let preparedLocalFacts = updateFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            headSHA: oldHead,
+            remoteTipSHA: preparedTip,
+            relativePosition: .unknown
+        )
+        let preparedFacts = updateFacts(
+            path: repo.path,
+            remoteURL: remoteURL,
+            headSHA: oldHead,
+            remoteTipSHA: preparedTip,
+            relativePosition: .behindOnly(2)
+        )
+        let dataDirectory = tmp.appendingPathComponent("cancel-update-data")
+        let persistence = Persistence(directoryURL: dataDirectory)
+        _ = await persistence.loadRegistry()
+        let digest = try XCTUnwrap(CheckoutEligibility.identityDigest(facts: localFacts, sourceKey: sourceKey))
+        try await persistence.saveRegistry(RegistryDocument(
+            schemaVersion: RegistryDocument.currentSchemaVersion,
+            projectScanRoots: [],
+            sourceMappings: [:],
+            checkoutObservations: [
+                repo.path: CheckoutObservation(
+                    result: .success,
+                    completedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                    remoteTipSHA: observedTip,
+                    identityDigest: digest
+                ),
+            ]
+        ))
+        let git = FakeUpdateGitClient(
+            localFacts: localFacts,
+            checkedFacts: checkedFacts,
+            preparedLocalFacts: preparedLocalFacts,
+            preparedFacts: preparedFacts,
+            updatedLocalFacts: preparedLocalFacts,
+            updatedFacts: preparedFacts
+        )
+        let model = AppModel(
+            personalRoots: [repo.path],
+            persistence: Persistence(directoryURL: dataDirectory),
+            gitInspector: git,
+            gitExecutor: git
+        )
+        await model.start()
+        let source = try XCTUnwrap(model.readModel.sources.first)
+        let selected = try XCTUnwrap(source.skills.first?.id)
+
+        try await model.prepareUpdate(skillIdentity: selected, checkoutPath: repo.path)
+        let plan = try XCTUnwrap(model.pendingUpdatePlan)
+        XCTAssertEqual(model.activeRun, .updateAwaitingConfirmation)
+        let fetchCount = await git.fetchCount
+        await model.checkNow()
+        let fetchCountAfterBlockedCheck = await git.fetchCount
+        XCTAssertEqual(fetchCountAfterBlockedCheck, fetchCount, "Update Run 中不得并发启动 Check Run")
+        do {
+            try await model.prepareUpdate(skillIdentity: selected, checkoutPath: repo.path)
+            XCTFail("Update Run 之间必须互斥")
+        } catch let error as UpdateRunContractError {
+            XCTAssertEqual(error, .runInProgress)
+        }
+
+        await model.cancelUpdate()
+
+        XCTAssertNil(model.pendingUpdatePlan)
+        XCTAssertNil(model.activeRun)
+        XCTAssertTrue(model.canStartCheckRun)
+        XCTAssertTrue(model.canStartUpdateRun)
+        XCTAssertEqual(model.updateResult, .cancelled(checkoutPath: repo.path))
+        XCTAssertTrue(UpdateResult.cancellationConsequence.contains("尚未检查"))
+        XCTAssertTrue(UpdateResult.cancellationConsequence.contains("重新检查"))
+        let card = try XCTUnwrap(model.readModel.checkoutCards(for: source.id).first)
+        XCTAssertEqual(card.state, .checkUnknown)
+        let audit = await Persistence(directoryURL: dataDirectory).loadAuditEvidence()
+        XCTAssertEqual(audit.records.count, 1)
+        XCTAssertEqual(audit.records.first?.updateRunID, plan.runID)
+        XCTAssertEqual(audit.records.first?.outcome, .cancelled)
     }
 
     @MainActor
@@ -1297,6 +1469,7 @@ final class AppModelTests: XCTestCase {
     private actor FakeUpdateGitClient: GitInspecting, GitExecuting {
         let localFacts: CheckoutGitFacts
         let checkedFacts: CheckoutGitFacts
+        let preparedLocalFacts: CheckoutGitFacts
         let preparedFacts: CheckoutGitFacts
         let updatedLocalFacts: CheckoutGitFacts
         let updatedFacts: CheckoutGitFacts
@@ -1304,21 +1477,39 @@ final class AppModelTests: XCTestCase {
         private(set) var fastForwardCount = 0
         private(set) var localInspectionsAfterFastForward = 0
         let removePathOnFastForward: URL?
+        let blockFastForward: Bool
+        private var fastForwardStarted = false
+        private var fastForwardStartWaiter: CheckedContinuation<Void, Never>?
+        private var fastForwardFinishWaiter: CheckedContinuation<Void, Never>?
 
         init(
             localFacts: CheckoutGitFacts,
             checkedFacts: CheckoutGitFacts,
+            preparedLocalFacts: CheckoutGitFacts? = nil,
             preparedFacts: CheckoutGitFacts? = nil,
             updatedLocalFacts: CheckoutGitFacts,
             updatedFacts: CheckoutGitFacts,
-            removePathOnFastForward: URL? = nil
+            removePathOnFastForward: URL? = nil,
+            blockFastForward: Bool = false
         ) {
             self.localFacts = localFacts
             self.checkedFacts = checkedFacts
+            self.preparedLocalFacts = preparedLocalFacts ?? localFacts
             self.preparedFacts = preparedFacts ?? checkedFacts
             self.updatedLocalFacts = updatedLocalFacts
             self.updatedFacts = updatedFacts
             self.removePathOnFastForward = removePathOnFastForward
+            self.blockFastForward = blockFastForward
+        }
+
+        func waitUntilFastForwardStarts() async {
+            if fastForwardStarted { return }
+            await withCheckedContinuation { fastForwardStartWaiter = $0 }
+        }
+
+        func finishFastForward() {
+            fastForwardFinishWaiter?.resume()
+            fastForwardFinishWaiter = nil
         }
 
         func fetch(remote: String, upstreamRef: String, at checkoutPath: String) async throws {
@@ -1326,6 +1517,12 @@ final class AppModelTests: XCTestCase {
         }
 
         func fastForward(to targetSHA: String, at checkoutPath: String) async throws {
+            fastForwardStarted = true
+            fastForwardStartWaiter?.resume()
+            fastForwardStartWaiter = nil
+            if blockFastForward {
+                await withCheckedContinuation { fastForwardFinishWaiter = $0 }
+            }
             XCTAssertEqual(targetSHA, updatedFacts.head?.sha)
             fastForwardCount += 1
             if let removePathOnFastForward {
@@ -1335,11 +1532,51 @@ final class AppModelTests: XCTestCase {
 
         func inspectCheckout(at checkoutPath: String, scope: GitInspectionScope) async -> CheckoutGitFacts {
             guard fastForwardCount > 0 else {
-                if scope == .localOnly { return localFacts }
+                if scope == .localOnly {
+                    return fetchCount == 0 ? localFacts : preparedLocalFacts
+                }
                 return fetchCount == 0 ? checkedFacts : preparedFacts
             }
             if scope == .localOnly { localInspectionsAfterFastForward += 1 }
             return scope == .localOnly ? updatedLocalFacts : updatedFacts
+        }
+    }
+
+    private actor BlockingCheckGitClient: GitInspecting, GitExecuting {
+        let initial: CheckoutGitFacts
+        let checked: CheckoutGitFacts
+        private var fetchStarted = false
+        private var fetchStartWaiter: CheckedContinuation<Void, Never>?
+        private var fetchFinishWaiter: CheckedContinuation<Void, Never>?
+
+        init(initial: CheckoutGitFacts, checked: CheckoutGitFacts) {
+            self.initial = initial
+            self.checked = checked
+        }
+
+        func waitUntilFetchStarts() async {
+            if fetchStarted { return }
+            await withCheckedContinuation { fetchStartWaiter = $0 }
+        }
+
+        func finishFetch() {
+            fetchFinishWaiter?.resume()
+            fetchFinishWaiter = nil
+        }
+
+        func fetch(remote: String, upstreamRef: String, at checkoutPath: String) async throws {
+            fetchStarted = true
+            fetchStartWaiter?.resume()
+            fetchStartWaiter = nil
+            await withCheckedContinuation { fetchFinishWaiter = $0 }
+        }
+
+        func fastForward(to targetSHA: String, at checkoutPath: String) async throws {
+            XCTFail("Check Run fake 不应执行 fast-forward")
+        }
+
+        func inspectCheckout(at checkoutPath: String, scope: GitInspectionScope) async -> CheckoutGitFacts {
+            scope == .localOnly ? initial : checked
         }
     }
 

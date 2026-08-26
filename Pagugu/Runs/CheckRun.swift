@@ -2,8 +2,8 @@ import Foundation
 
 // L3 COORD: Pagugu/Runs/CheckRun.swift
 // POS: Runs 模块（ADR-0009 §5）。owns 全量 Check Run，以及 Update Run 的 fetch 重查、
-//      精确 SHA 计划、确认后漂移比对、ff-only、post-verify 与 start/success 审计调用。
-// TEST: repo://PaguguTests/CheckRunTests.swift（Check Run + 零网络 scratch Update Run 成功路径）。
+//      精确 SHA 计划、确认取消、漂移比对、ff-only、post-verify、九类失败与 terminal 审计调用。
+// TEST: repo://PaguguTests/CheckRunTests.swift（Check Run + 零网络 scratch Update Run 成功/失败路径）。
 
 struct CheckRunTarget: Sendable {
     let sourceKey: SkillSourceKey
@@ -237,31 +237,111 @@ struct UpdatePlan: Equatable, Sendable {
     fileprivate let sourceKey: SkillSourceKey
     fileprivate let identityDigest: CheckoutIdentityDigest
 
+    fileprivate var auditTarget: UpdateAuditTarget {
+        UpdateAuditTarget(
+            skillIdentity: updateAuditIdentity(skillIdentity),
+            checkoutCanonicalPath: checkoutCanonicalPath,
+            branchName: branchName,
+            upstreamRefName: upstreamRefName
+        )
+    }
+
     fileprivate var auditPlan: UpdateAuditPlan {
         UpdateAuditPlan(
-            skillIdentity: auditIdentity(skillIdentity),
+            skillIdentity: updateAuditIdentity(skillIdentity),
             checkoutCanonicalPath: checkoutCanonicalPath,
             branchName: branchName,
             upstreamRefName: upstreamRefName,
             currentHeadSHA: currentHeadSHA,
             targetSHA: targetSHA,
             behindCount: behindCount,
-            affectedSkills: affectedSkills.map { auditIdentity($0.identity) }
+            affectedSkills: affectedSkills.map { updateAuditIdentity($0.identity) }
         )
     }
+}
 
-    private func auditIdentity(_ identity: SkillIdentity) -> UpdateAuditPlan.SkillIdentityValue {
-        UpdateAuditPlan.SkillIdentityValue(
-            skillSourceKey: identity.sourceKey.registryValue,
-            repositoryRelativePath: identity.repositoryRelativePath
-        )
-    }
+private func updateAuditIdentity(_ identity: SkillIdentity) -> UpdateAuditPlan.SkillIdentityValue {
+    UpdateAuditPlan.SkillIdentityValue(
+        skillSourceKey: identity.sourceKey.registryValue,
+        repositoryRelativePath: identity.repositoryRelativePath
+    )
 }
 
 enum UpdatePreparation: Equatable, Sendable {
     case ready(UpdatePlan)
     case upToDate
     case blocked(CheckoutGitState)
+}
+
+// L4 OUT: Update Run 的稳定失败分类。UI 与 Audit 只消费 raw reason code，
+//         中文名和恢复方向始终从当前 Runs 合同派生，不持久化文案或原始 Git 输出。
+// TEST: repo://PaguguTests/CheckRunTests.swift::testEveryUpdateFailureHasStableCodeChineseNameAndRecoveryDirection。
+enum UpdateRunFailureReason: String, CaseIterable, Equatable, Sendable {
+    case lockBusy = "lock-busy"
+    case identityChanged = "identity-changed"
+    case fetchFailure = "fetch-failure"
+    case preconditionChanged = "precondition-changed"
+    case tipChanged = "tip-changed"
+    case fastForwardRejected = "ff-rejected"
+    case commandFailure = "command-failure"
+    case verificationFailed = "verification-failed"
+    case interruptedUnknown = "interrupted-unknown"
+
+    var displayName: String {
+        switch self {
+        case .lockBusy: return "Git 锁被占用"
+        case .identityChanged: return "检出身份已变化"
+        case .fetchFailure: return "远端获取失败"
+        case .preconditionChanged: return "更新前置条件已变化"
+        case .tipChanged: return "远端目标已变化"
+        case .fastForwardRejected: return "快速前进被拒绝"
+        case .commandFailure: return "Git 命令失败"
+        case .verificationFailed: return "更新验证失败"
+        case .interruptedUnknown: return "更新结果未知"
+        }
+    }
+
+    var recoveryDirection: String {
+        switch self {
+        case .lockBusy:
+            return "确认无其他 Git 进程后重新发起更新。"
+        case .identityChanged:
+            return "重新扫描后重新检查。"
+        case .fetchFailure:
+            return "在终端验证网络、凭证与远端分支后重新发起更新。"
+        case .preconditionChanged:
+            return "按当前检出状态的恢复方向处理后重新检查。"
+        case .tipChanged:
+            return "重新发起更新；Pagugu 会重新重查并确认计划。"
+        case .fastForwardRejected:
+            return "在终端处理分叉后重新检查。"
+        case .commandFailure:
+            return "在终端核对 Git 失败原因与仓库状态后重新发起更新。"
+        case .verificationFailed:
+            return "在终端核对该工作树状态后重新扫描。"
+        case .interruptedUnknown:
+            return "重新扫描，并按当前 Git 事实处理。"
+        }
+    }
+}
+
+struct UpdateRunFailure: Error, Equatable, Sendable {
+    let reason: UpdateRunFailureReason
+    let blockingState: CheckoutGitState?
+
+    init(reason: UpdateRunFailureReason, blockingState: CheckoutGitState? = nil) {
+        self.reason = reason
+        self.blockingState = blockingState
+    }
+
+    var displayName: String { reason.displayName }
+
+    var recoveryDirection: String {
+        if reason == .preconditionChanged, let blockingState {
+            return blockingState.recoveryDirection
+        }
+        return reason.recoveryDirection
+    }
 }
 
 struct UpdateExecutionSuccess: Equatable, Sendable {
@@ -271,21 +351,14 @@ struct UpdateExecutionSuccess: Equatable, Sendable {
 
 enum UpdateRunContractError: Error, Equatable, Sendable {
     case invalidRequest
-    case identityChanged
-    case preconditionChanged
-    case tipChanged
-    case verificationFailed
+    case runInProgress
 
     var recoveryDirection: String {
         switch self {
         case .invalidRequest:
             return "重新扫描并从当前 Skill 状态重新发起更新。"
-        case .identityChanged:
-            return "重新扫描后重新检查。"
-        case .preconditionChanged, .tipChanged:
-            return "重新发起更新，让 Pagugu 重新重查并确认计划。"
-        case .verificationFailed:
-            return "在终端核对该工作树状态后重新扫描。"
+        case .runInProgress:
+            return "等待当前运行完成，或先取消待确认的更新。"
         }
     }
 }
@@ -307,7 +380,7 @@ final class UpdateRunner: Sendable {
 
     // L4 IN: request 必须来自当前完整 Scan Result 的 update-available 卡片，且影响 Skill 属于目标检出。
     // OUT: fetch 后按实时事实返回 ready 精确计划、upToDate noop 或一个既有阻断态。
-    // FAIL: 输入/身份漂移抛 UpdateRunContractError；Git 失败保留 GitCommandError 因果。零执行副作用。
+    // FAIL: 输入无效抛合同错误；运行失败归一到九类 UpdateRunFailure 并写 terminal-only failed。
     // TEST: repo://PaguguTests/CheckRunTests.swift（noop、阻断、scratch ready）。
     // L6 CHAIN: 入口事实校验 → 单 upstream fetch → 全事实重查 → 同一 12 态裁决 →
     //           update-available 冻结精确 SHA 计划；up-to-date/阻断态不产生计划。
@@ -324,39 +397,104 @@ final class UpdateRunner: Sendable {
                   facts: request.target.facts,
                   sourceKey: request.target.sourceKey
               ),
+              let entranceHead = request.target.facts.head,
+              let branchName = entranceHead.branchName,
               let upstream = request.target.facts.upstream else {
             throw UpdateRunContractError.invalidRequest
         }
-
-        try await gitExecutor.fetch(
-            remote: upstream.remoteName,
-            upstreamRef: upstream.ref,
-            at: request.target.facts.checkoutPath
+        let runID = UUID().uuidString
+        let auditTarget = UpdateAuditTarget(
+            skillIdentity: updateAuditIdentity(request.skillIdentity),
+            checkoutCanonicalPath: request.target.facts.checkoutPath,
+            branchName: branchName,
+            upstreamRefName: upstream.ref
         )
+
+        do {
+            try await gitExecutor.fetch(
+                remote: upstream.remoteName,
+                upstreamRef: upstream.ref,
+                at: request.target.facts.checkoutPath
+            )
+        } catch is CancellationError {
+            let failure = UpdateRunFailure(reason: .interruptedUnknown)
+            await audit.recordUpdateFailed(
+                runID: runID,
+                target: auditTarget,
+                reasonCode: failure.reason.rawValue
+            )
+            throw failure
+        } catch let error as GitCommandError {
+            let failure = UpdateRunFailure(
+                reason: error.indicatesLockBusy ? .lockBusy : .fetchFailure
+            )
+            await audit.recordUpdateFailed(
+                runID: runID,
+                target: auditTarget,
+                reasonCode: failure.reason.rawValue
+            )
+            throw failure
+        } catch {
+            let failure = UpdateRunFailure(reason: .fetchFailure)
+            await audit.recordUpdateFailed(
+                runID: runID,
+                target: auditTarget,
+                reasonCode: failure.reason.rawValue
+            )
+            throw failure
+        }
         let facts = await gitInspector.inspectCheckout(
             at: request.target.facts.checkoutPath,
             scope: .afterSuccessfulCheck
         )
+        guard !Task.isCancelled else {
+            let failure = UpdateRunFailure(reason: .interruptedUnknown)
+            await audit.recordUpdateFailed(
+                runID: runID,
+                target: auditTarget,
+                reasonCode: failure.reason.rawValue
+            )
+            throw failure
+        }
         guard CheckoutEligibility.identityDigest(
             facts: facts,
             sourceKey: request.target.sourceKey
         ) == entranceIdentity else {
-            throw UpdateRunContractError.identityChanged
+            let failure = UpdateRunFailure(reason: identityMismatchReason(facts))
+            await audit.recordUpdateFailed(
+                runID: runID,
+                target: auditTarget,
+                reasonCode: failure.reason.rawValue
+            )
+            throw failure
         }
 
         let state = CheckoutEligibility.evaluate(facts: facts, sourceKey: request.target.sourceKey)
         if state == .upToDate { return .upToDate }
-        guard state == .updateAvailable else { return .blocked(state) }
+        guard state == .updateAvailable else {
+            await audit.recordUpdateFailed(
+                runID: runID,
+                target: auditTarget,
+                reasonCode: UpdateRunFailureReason.preconditionChanged.rawValue
+            )
+            return .blocked(state)
+        }
         guard let head = facts.head,
               let branchName = head.branchName,
               let currentUpstream = facts.upstream,
               let targetSHA = currentUpstream.sha,
               case .behindOnly(let behindCount) = facts.relativePosition else {
-            throw UpdateRunContractError.invalidRequest
+            let failure = UpdateRunFailure(reason: .commandFailure)
+            await audit.recordUpdateFailed(
+                runID: runID,
+                target: auditTarget,
+                reasonCode: failure.reason.rawValue
+            )
+            throw failure
         }
 
         return .ready(UpdatePlan(
-            runID: UUID().uuidString,
+            runID: runID,
             skillIdentity: request.skillIdentity,
             checkoutCanonicalPath: facts.checkoutPath,
             branchName: branchName,
@@ -371,38 +509,65 @@ final class UpdateRunner: Sendable {
         ))
     }
 
+    // L4 IN: plan 是 prepareUpdate 返回、但用户在确认页显式取消的冻结值。
+    // OUT: 只写 terminal-only cancelled 审计；不写 start，不执行 Git，不保留 run 态。
+    func cancelPrepared(_ plan: UpdatePlan) async {
+        await audit.recordUpdateCancelled(runID: plan.runID, plan: plan.auditPlan)
+    }
+
     // L4 IN: plan 是 prepareUpdate 返回且由用户明确确认的冻结值。
-    // OUT: 仅在精确 SHA ff 与 post-verify 成功后返回事实，并写同 run ID 的 start/success 审计。
-    // FAIL: 漂移/验证失败抛稳定 UpdateRunContractError；Git 错误保留因果。失败零重试零回滚。
+    // OUT: 仅在精确 SHA ff 与 post-verify 成功后返回事实，并写同 run ID 的 started/success terminal 审计。
+    // FAIL: 漂移、命令与验证失败归一到九类 UpdateRunFailure；失败零重试零回滚。
     // TEST: repo://PaguguTests/CheckRunTests.swift（HEAD 漂移 fail closed、scratch 成功与审计）。
     // L6 CHAIN: 确认绑定写 start → 漂移/资格重查 → 精确 SHA ff-only → post-verify →
-    //           成功 terminal 审计。失败九类与 terminal 记录由后续 #24 收口。
+    //           success/failed terminal 审计。任一失败立即停止，不重试、不回滚。
     func executeConfirmed(_ plan: UpdatePlan) async throws -> UpdateExecutionSuccess {
         await audit.recordUpdateStarted(runID: plan.runID, plan: plan.auditPlan)
+        guard !Task.isCancelled else {
+            throw await recordFailure(.interruptedUnknown, plan: plan)
+        }
         let executionFacts = await gitInspector.inspectCheckout(
             at: plan.checkoutCanonicalPath,
             scope: .afterSuccessfulCheck
         )
+        guard !Task.isCancelled else {
+            throw await recordFailure(.interruptedUnknown, plan: plan)
+        }
         guard CheckoutEligibility.identityDigest(
             facts: executionFacts,
             sourceKey: plan.sourceKey
         ) == plan.identityDigest else {
-            throw UpdateRunContractError.identityChanged
+            throw await recordFailure(identityMismatchReason(executionFacts), plan: plan)
         }
         guard executionFacts.head?.sha == plan.currentHeadSHA else {
-            throw UpdateRunContractError.preconditionChanged
+            throw await recordFailure(.preconditionChanged, plan: plan)
         }
         guard executionFacts.upstream?.sha == plan.targetSHA else {
-            throw UpdateRunContractError.tipChanged
+            throw await recordFailure(.tipChanged, plan: plan)
         }
         guard CheckoutEligibility.evaluate(
             facts: executionFacts,
             sourceKey: plan.sourceKey
         ) == .updateAvailable else {
-            throw UpdateRunContractError.preconditionChanged
+            throw await recordFailure(
+                .preconditionChanged,
+                blockingState: CheckoutEligibility.evaluate(facts: executionFacts, sourceKey: plan.sourceKey),
+                plan: plan
+            )
         }
 
-        try await gitExecutor.fastForward(to: plan.targetSHA, at: plan.checkoutCanonicalPath)
+        do {
+            try await gitExecutor.fastForward(to: plan.targetSHA, at: plan.checkoutCanonicalPath)
+        } catch is CancellationError {
+            throw await recordFailure(.interruptedUnknown, plan: plan)
+        } catch let error as GitCommandError {
+            let reason = error.indicatesLockBusy
+                ? UpdateRunFailureReason.lockBusy
+                : await reasonAfterFastForwardFailure(plan)
+            throw await recordFailure(reason, plan: plan)
+        } catch {
+            throw await recordFailure(await reasonAfterFastForwardFailure(plan), plan: plan)
+        }
         let postFacts = await gitInspector.inspectCheckout(
             at: plan.checkoutCanonicalPath,
             scope: .afterSuccessfulCheck
@@ -416,11 +581,55 @@ final class UpdateRunner: Sendable {
                   sourceKey: plan.sourceKey
               ) == plan.identityDigest,
               CheckoutEligibility.evaluate(facts: postFacts, sourceKey: plan.sourceKey) == .upToDate else {
-            throw UpdateRunContractError.verificationFailed
+            throw await recordFailure(.verificationFailed, plan: plan)
         }
 
         await audit.recordUpdateSucceeded(runID: plan.runID, plan: plan.auditPlan)
         return UpdateExecutionSuccess(plan: plan, postVerificationFacts: postFacts)
+    }
+
+    private func identityMismatchReason(_ facts: CheckoutGitFacts) -> UpdateRunFailureReason {
+        switch facts.inspectionFailure {
+        case .none, .notAWorkTree:
+            return .identityChanged
+        case .launchFailed, .timedOut, .commandFailed:
+            return .commandFailure
+        }
+    }
+
+    private func reasonAfterFastForwardFailure(_ plan: UpdatePlan) async -> UpdateRunFailureReason {
+        let currentFacts = await gitInspector.inspectCheckout(
+            at: plan.checkoutCanonicalPath,
+            scope: .afterSuccessfulCheck
+        )
+        if case .notAWorkTree = currentFacts.inspectionFailure {
+            return .identityChanged
+        }
+        guard CheckoutEligibility.identityDigest(
+            facts: currentFacts,
+            sourceKey: plan.sourceKey
+        ) == plan.identityDigest else {
+            return currentFacts.inspectionFailure == nil ? .identityChanged : .commandFailure
+        }
+        if case .diverged = currentFacts.relativePosition {
+            return .fastForwardRejected
+        }
+        return .commandFailure
+    }
+
+    private func recordFailure(
+        _ reason: UpdateRunFailureReason,
+        blockingState: CheckoutGitState? = nil,
+        plan: UpdatePlan
+    ) async -> UpdateRunFailure {
+        let failure = UpdateRunFailure(reason: reason, blockingState: blockingState)
+        await audit.recordUpdateFailed(
+            runID: plan.runID,
+            target: plan.auditTarget,
+            plan: plan.auditPlan,
+            reasonCode: reason.rawValue
+        )
+        return failure
     }
 }
 

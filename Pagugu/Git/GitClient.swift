@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import os
 
 // L3 COORD: Pagugu/Git/GitClient.swift
 // POS: Git 模块（ADR-0009 §4）。owns Git 子进程 seam 与正交 Checkout Git Fact。
@@ -116,13 +117,19 @@ protocol GitInspecting: Sendable {
 }
 
 // L4 IN: fetch 接收同一 upstream 的 remote/ref；fastForward 接收 Git 返回的完整精确 SHA。
-// OUT: fetch 只移动单个 remote-tracking ref；fastForward 只对目标工作树执行 ff-only。
+// OUT: fetch 只移动单个 remote-tracking ref；fastForward 只对目标工作树执行 ff-only；
+//      terminateInFlight 尽力终止本进程登记的在途 Git 子进程。
 // INVARIANT: 全部命令非交互并屏蔽 hooks；不改 Git 配置，不 reset/force/stash/checkout。
 // FAIL: 非交互失败抛 GitCommandError；caller 决定恢复语义。
 // TEST: repo://PaguguTests/GitEligibilityTests.swift（单分支 fetch、精确 SHA ff、hook 屏蔽）。
 protocol GitExecuting: Sendable {
     func fetch(remote: String, upstreamRef: String, at checkoutPath: String) async throws
     func fastForward(to targetSHA: String, at checkoutPath: String) async throws
+    func terminateInFlight()
+}
+
+extension GitExecuting {
+    func terminateInFlight() {}
 }
 
 struct GitCommandOutput: Equatable, Sendable {
@@ -135,6 +142,40 @@ enum GitCommandError: Error, Equatable, Sendable {
     case launchFailed(String)
     case timedOut(seconds: Double)
     case commandFailed(exitCode: Int32, stderr: String)
+
+    /// Git 在固定 C locale 下报告 index/ref 锁冲突的协议级归一化。
+    /// Runs 只消费此事实，不解析原始 stderr，也不把原始输出写入审计。
+    var indicatesLockBusy: Bool {
+        guard case .commandFailed(_, let stderr) = self else { return false }
+        let message = stderr.lowercased()
+        return message.contains(".lock") && (
+            message.contains("file exists") ||
+                message.contains("unable to create") ||
+                message.contains("cannot lock ref") ||
+                message.contains("could not lock")
+        )
+    }
+}
+
+private final class GitProcessRegistry: Sendable {
+    static let shared = GitProcessRegistry()
+
+    private let processes = OSAllocatedUnfairLock(initialState: [UUID: Process]())
+
+    func insert(_ process: Process, id: UUID) {
+        processes.withLock { $0[id] = process }
+    }
+
+    func remove(id: UUID) {
+        processes.withLock { $0[id] = nil }
+    }
+
+    func terminateAll() {
+        let running = processes.withLock { Array($0.values) }
+        for process in running where process.isRunning {
+            process.terminate()
+        }
+    }
 }
 
 struct GitClient: GitInspecting, GitExecuting, Sendable {
@@ -143,6 +184,10 @@ struct GitClient: GitInspecting, GitExecuting, Sendable {
 
     init(timeoutSeconds: Double = 3) {
         self.timeoutSeconds = timeoutSeconds
+    }
+
+    func terminateInFlight() {
+        GitProcessRegistry.shared.terminateAll()
     }
 
     func inspectCheckout(at checkoutPath: String, scope: GitInspectionScope) async -> CheckoutGitFacts {
@@ -519,6 +564,9 @@ struct GitClient: GitInspecting, GitExecuting, Sendable {
         } catch {
             throw GitCommandError.launchFailed(error.localizedDescription)
         }
+        let processID = UUID()
+        GitProcessRegistry.shared.insert(process, id: processID)
+        defer { GitProcessRegistry.shared.remove(id: processID) }
 
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(timeoutSeconds))
