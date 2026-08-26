@@ -42,6 +42,7 @@
 		771836A7F79E74FBDFD2E975 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EE34382C914BCF5B40B37632 /* Cocoa.framework */; };
 		84BDB14DCA6DAC95C2D9FF7A /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EE34382C914BCF5B40B37632 /* Cocoa.framework */; };
 		9B97CCAACAD38E990F2D1F9B /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0B6AA900E68DA4F58B8C3 /* MenuBarView.swift */; };
+		CDE08E3A518542BEA51C0A66 /* DesignTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0EE47A618DB4F209DF3EA72 /* DesignTokens.swift */; };
 		BC4D31A5D738A9E6AAAB55E0 /* AppIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADA80321424BDF5F1BDE07CA /* AppIdentity.swift */; };
 /* End PBXBuildFile section */
 
@@ -87,6 +88,7 @@
 		AA100000000000000000A008 /* PrototypeVariantE.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PrototypeVariantE.swift; path = Prototype/PrototypeVariantE.swift; sourceTree = "<group>"; };
 		AA100000000000000000A009 /* PrototypeVariantF.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PrototypeVariantF.swift; path = Prototype/PrototypeVariantF.swift; sourceTree = "<group>"; };
 		43D0B6AA900E68DA4F58B8C3 /* MenuBarView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MenuBarView.swift; path = Views/MenuBarView.swift; sourceTree = "<group>"; };
+		A0EE47A618DB4F209DF3EA72 /* DesignTokens.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DesignTokens.swift; path = Views/DesignTokens.swift; sourceTree = "<group>"; };
 		6BC3BD4964472405F922F8D1 /* PaguguTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PaguguTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9C12C2329B72ACE494385C03 /* PaguguApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PaguguApp.swift; path = App/PaguguApp.swift; sourceTree = "<group>"; };
 		ADA80321424BDF5F1BDE07CA /* AppIdentity.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppIdentity.swift; path = Support/AppIdentity.swift; sourceTree = "<group>"; };
@@ -158,6 +160,7 @@
 				D18000000000000000000004 /* Registry.swift */,
 				D25000000000000000000004 /* Audit.swift */,
 				09BE7DE72F107FBC97261DC7 /* ContentView.swift */,
+				A0EE47A618DB4F209DF3EA72 /* DesignTokens.swift */,
 				43D0B6AA900E68DA4F58B8C3 /* MenuBarView.swift */,
 				ADA80321424BDF5F1BDE07CA /* AppIdentity.swift */,
 				D15A00000000000000000011 /* SkillIdentity.swift */,
@@ -293,6 +296,7 @@
 				D18000000000000000000003 /* Registry.swift in Sources */,
 				D25000000000000000000003 /* Audit.swift in Sources */,
 				40F4734042A82853E4E20514 /* ContentView.swift in Sources */,
+				CDE08E3A518542BEA51C0A66 /* DesignTokens.swift in Sources */,
 				9B97CCAACAD38E990F2D1F9B /* MenuBarView.swift in Sources */,
 				BC4D31A5D738A9E6AAAB55E0 /* AppIdentity.swift in Sources */,
 				D15A00000000000000000012 /* SkillIdentity.swift in Sources */,

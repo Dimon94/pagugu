@@ -7,7 +7,7 @@ Status: runnable discovery、全量手动 Check Run、freshness 重推导、安�
 ## 当前事实
 
 - 产品：Pagugu，本地 macOS Agent Skill 管理与安全同步应用。
-- 当前阶段：可运行发现目录、逐检出实时 Git Fact、全量手动 Check Run、观察 freshness 与重启重推导、安全 Update Run（重查、冻结精确 SHA、确认/取消、ff-only、post-verify、九类失败、完整刷新）、Update start/terminal 与确认前 terminal-only 审计、审计呈现三语义面（工具栏「最近活动」摘要、详情、清空）与孤儿「结果未知（已中断）」呈现、审计损坏 fail-open「历史不可用」、Registry 重置 quarantine 备份路径呈现、App 级 Check/Update 单一互斥、12 态裁决、详情卡片、目录逐态短语/五档静默排序、Project Scan Root 管理与复制 Installation 的人工来源映射、主窗口 Update Run 全流程接线（逐检出更新 intent、多 Eligible 检出当次选择、冻结计划确认页含影响范围名单、结果区六类反馈横幅）。ChunUI 兼容性验证已完成（不引入，见 docs/product/chunui-compatibility.md）。
+- 当前阶段：可运行发现目录、逐检出实时 Git Fact、全量手动 Check Run、观察 freshness 与重启重推导、安全 Update Run（重查、冻结精确 SHA、确认/取消、ff-only、post-verify、九类失败、完整刷新）、Update start/terminal 与确认前 terminal-only 审计、审计呈现三语义面（工具栏「最近活动」摘要、详情、清空）与孤儿「结果未知（已中断）」呈现、审计损坏 fail-open「历史不可用」、Registry 重置 quarantine 备份路径呈现、App 级 Check/Update 单一互斥、12 态裁决、详情卡片、目录逐态短语/五档静默排序、Project Scan Root 管理与复制 Installation 的人工来源映射、主窗口 Update Run 全流程接线（逐检出更新 intent、多 Eligible 检出当次选择、冻结计划确认页含影响范围名单、结果区六类反馈横幅）。ChunUI 兼容性验证已完成（不引入，见 docs/product/chunui-compatibility.md）。主窗口视觉令牌集中于 DesignTokens，原生 SwiftUI 令牌化打磨见 docs/product/ui-polish-review.md。
 - 技术栈：原生 Xcode macOS App、SwiftUI、Swift 6、macOS 14+。
 - 运行入口：`Pagugu/App/PaguguApp.swift`；稳定本地入口为 `script/build_and_run.sh`。
 - 分发：本地构建；App Sandbox 关闭。签名、公证和 GitHub Releases 尚未实现。
@@ -47,8 +47,9 @@ Status: runnable discovery、全量手动 Check Run、freshness 重推导、安�
 | Module | Owns | Does not own | Public interface | Depends on | Verification |
 | --- | --- | --- | --- | --- | --- |
 | PaguguApp | 应用生命周期、主窗口与状态栏场景 | Skill 扫描、Git 状态、持久化 | macOS App 入口 | SwiftUI、AppKit | `script/build_and_run.sh --verify` |
-| ContentView | 主窗口 Variant F IA；显示目录状态短语、唯一手动检查入口、结果区六类反馈横幅与逐检出卡片（含更新 intent）；更新确认 sheet（多检出当次选择 + 冻结计划 + 影响范围名单）；逐 Installation 来源映射、失效原因与删除确认；扫描范围管理、「最近活动」三语义面与 Registry 故障阻断 | Skill Read Model 派生、Checkout Git State/Run 裁决、目录排序、审计投影派生、IO | SwiftUI `View` | SwiftUI、AppModel | App build |
+| ContentView | 主窗口 Variant F IA；显示目录状态短语、唯一手动检查入口、结果区六类反馈横幅与逐检出卡片（含更新 intent）；更新确认 sheet（多检出当次选择 + 冻结计划 + 影响范围名单）；逐 Installation 来源映射、失效原因与删除确认；扫描范围管理、「最近活动」三语义面与 Registry 故障阻断 | Skill Read Model 派生、Checkout Git State/Run 裁决、目录排序、审计投影派生、IO、视觉令牌定义 | SwiftUI `View` | SwiftUI、AppModel、DesignTokens | App build |
 | MenuBarView | 打开主窗口与退出动作 | 更新状态和后台调度 | SwiftUI `View` | SwiftUI、AppKit | App build + launch |
+| DesignTokens | 主窗口视觉令牌（间距、圆角、尺寸、字号、语义状态色、表面材质、按压反馈） | 业务状态裁决、ChunUI、IA 语义 | `DesignTokens` enum、`PressFeedbackButtonStyle` | SwiftUI | `PaguguTests` 令牌不变量 |
 | AppIdentity | 产品展示名、Bundle ID、主窗口 ID | 用户配置 | 静态常量 | Swift 标准库 | `PaguguTests.testProductIdentity` |
 | Discovery | Discovery Scan：遍历全部 Scan Root、发现入口标注、软链接解析、Canonical Path 去重防环、SKILL.md 解析校验与原文读取、Git 工作树根检测（`.git` 存在性）、复制投影内容指纹（SHA-256，fail closed）、Scan Issue | 身份归因与指纹聚合（归 Identity）、Git 子进程 | `Discovery.scanAll(personalRoots:projectRoots:)`、`scanPersonalRoots(_:)`、`scanProjectRoot(_:)`、`skillMarkdown(atCanonicalPath:)`、`contentFingerprint(ofSkillAtCanonicalPath:)` | Foundation、CryptoKit | `PaguguTests/DiscoveryTests.swift` |
 | Identity | Skill Source Key 规范化、人工映射重验证、归因与聚合、Skill Source Checkout、同一 remote 多检出及逐检出 Skill 成员清单（全部纯函数） | 文件系统遍历、Git 调用、状态裁决与主张写入 | `SkillSourceKey.normalize(remoteURL:)`、`SkillDirectory.contents(from:gitFactsByCheckoutPath:mappings:)` | Foundation、Discovery/Git/Persistence 值类型 | `PaguguTests/IdentityTests.swift`、`AppModelTests.swift` |
@@ -79,9 +80,7 @@ Status: runnable discovery、全量手动 Check Run、freshness 重推导、安�
 ## 明确未实现
 
 - `SKILL.md` frontmatter 的完整 Agent Skills 规范校验（name/description 字段违规标注）。
-- Views 的更新入口、确认 sheet、失败/取消结果区与 run 互斥禁用接线归 #27；当前后端已发布对应 intent、稳定失败语义与只读投影。
-- Skill 详情「相关记录」「更新动作」两块（后续票）。
-- Logo、签名、公证与发布。
+- 宿主真实 logo 资源（当前为占位圆点）；签名、公证与发布。
 
 ## 验证
 

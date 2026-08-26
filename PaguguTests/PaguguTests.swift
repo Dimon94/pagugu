@@ -60,4 +60,32 @@ final class PaguguTests: XCTestCase {
         model.dismissCheckRunSummary()
         model.dismissRegistryResetBackupPath()
     }
+
+    // MARK: - Design Tokens（#28：令牌不变量；错误实现会漂密度、按压或状态色）
+
+    func testChildIndentEqualsDisclosureHotspotPlusRowSpacing() {
+        XCTAssertEqual(
+            DesignTokens.Size.childIndent,
+            DesignTokens.Size.disclosureHotspot + DesignTokens.Space.row
+        )
+    }
+
+    func testPressScaleMatchesBetterUIConstant() {
+        XCTAssertEqual(DesignTokens.Motion.pressScale, 0.96)
+        XCTAssertEqual(DesignTokens.Motion.pressDuration, 0.1)
+        XCTAssertLessThan(DesignTokens.Motion.pressScale, 1)
+        XCTAssertGreaterThanOrEqual(DesignTokens.Motion.pressScale, 0.95)
+    }
+
+    func testCheckoutStatusColorsFollowSemanticRoles() {
+        XCTAssertEqual(DesignTokens.statusColor(for: .updateAvailable), DesignTokens.Status.ok)
+        XCTAssertEqual(DesignTokens.statusColor(for: .upToDate), DesignTokens.Status.ok)
+        XCTAssertEqual(DesignTokens.statusColor(for: .dirty), DesignTokens.Status.warning)
+        XCTAssertEqual(DesignTokens.statusColor(for: .diverged), DesignTokens.Status.warning)
+        XCTAssertEqual(DesignTokens.statusColor(for: .inspectionFailed), DesignTokens.Status.error)
+        XCTAssertEqual(DesignTokens.statusColor(for: .upstreamMismatch), DesignTokens.Status.error)
+        XCTAssertEqual(DesignTokens.statusColor(for: .noRemote), DesignTokens.Status.neutral)
+        XCTAssertEqual(DesignTokens.statusColor(for: .checkUnknown), DesignTokens.Status.neutral)
+        XCTAssertEqual(DesignTokens.statusColor(for: .aheadOnly), DesignTokens.Status.neutral)
+    }
 }

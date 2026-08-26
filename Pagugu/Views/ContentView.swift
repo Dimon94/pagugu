@@ -15,8 +15,9 @@ import UniformTypeIdentifiers
 //      工具栏提供全量手动检查、扫描范围管理与「最近活动」三语义面（摘要、详情、清空确认；
 //      详情标注「当时记录」，失败无 stderr/命令复制/重试，只导航相关 Skill；损坏呈现「历史不可用」）；
 //      Registry 故障由全窗口门面接管，重置后呈现 quarantine 备份路径横幅。
+//      全部视觉常量消费 DesignTokens（repo://Pagugu/Views/DesignTokens.swift），不逐组件手写冲突值。
 //      View 只消费 Skill Read Model 与审计投影、只发 AppModel intent，不做 IO。
-// TEST: repo://PaguguTests/AppModelTests.swift（AppModel 正常/阻断投影与 intent 路由 smoke）。
+// TEST: repo://PaguguTests/AppModelTests.swift（投影与 intent smoke）；repo://PaguguTests/PaguguTests.swift（ContentView 构造、DesignTokens）。
 
 struct ContentView: View {
     @ObservedObject var model: AppModel
@@ -134,10 +135,12 @@ struct ContentView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 if let progress = model.checkRunProgress {
-                    HStack(spacing: 6) {
+                    HStack(spacing: DesignTokens.Space.row) {
                         ProgressView().controlSize(.small)
                         Text("检查中 \(progress.completed)/\(progress.total)")
-                            .foregroundStyle(.secondary)
+                            .font(DesignTokens.Fonts.caption)
+                            .monospacedDigit()
+                            .foregroundStyle(DesignTokens.Status.neutral)
                     }
                 } else {
                     Button("检查更新", systemImage: "arrow.triangle.2.circlepath") {
@@ -230,11 +233,29 @@ struct ContentView: View {
 private struct ResultAreaView: View {
     @ObservedObject var model: AppModel
 
+    private var hasBanner: Bool {
+        model.registryResetBackupPath != nil || model.checkRunProgress != nil
+            || model.checkRunSummary != nil || model.updateResult != nil
+            || model.updateRefreshFailure != nil || model.projectScanRootError != nil
+            || model.sourceMappingError != nil
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
+        if hasBanner {
+            VStack(spacing: DesignTokens.Space.row) {
+                banners
+            }
+            .padding(.horizontal, DesignTokens.Space.cardPadding)
+            .padding(.vertical, DesignTokens.Space.block)
+            .overlay(alignment: .bottom) { Divider() }
+        }
+    }
+
+    @ViewBuilder
+    private var banners: some View {
             if let backupPath = model.registryResetBackupPath {
                 ResultBanner(
-                    level: .info,
+                    level: .success,
                     icon: "checkmark.circle",
                     text: "Registry 已重置为空。原文件备份在：\(backupPath)",
                     onDismiss: { model.dismissRegistryResetBackupPath() }
@@ -242,14 +263,15 @@ private struct ResultAreaView: View {
             }
             if let progress = model.checkRunProgress {
                 ResultBanner(
-                    level: .info,
+                    level: .running,
                     icon: "arrow.triangle.2.circlepath",
                     text: "检查中 \(progress.completed)/\(progress.total)",
                     onDismiss: nil
                 )
             } else if let summary = model.checkRunSummary {
                 ResultBanner(
-                    level: summary.outcome == .complete ? .info : .warning,
+                    level: summary.outcome == .complete ? .success
+                        : summary.outcome == .partial ? .warning : .failure,
                     icon: summary.outcome == .complete ? "checkmark.circle"
                         : summary.outcome == .partial ? "exclamationmark.triangle" : "xmark.circle",
                     text: "检查\(summary.outcome.rawValue)：成功 \(summary.succeeded) · 失败 \(summary.failed) · 不适用 \(summary.skipped)",
@@ -285,7 +307,6 @@ private struct ResultAreaView: View {
                     onDismiss: { model.clearSourceMappingError() }
                 )
             }
-        }
     }
 
     @ViewBuilder
@@ -293,14 +314,14 @@ private struct ResultAreaView: View {
         switch result {
         case .success(_, let targetSHA):
             ResultBanner(
-                level: .info,
+                level: .success,
                 icon: "checkmark.circle",
                 text: "更新成功。已 fast-forward 到目标提交（\(String(targetSHA.prefix(7)))）。",
                 onDismiss: { model.dismissUpdateResult() }
             )
         case .upToDate:
             ResultBanner(
-                level: .info,
+                level: .success,
                 icon: "checkmark.circle",
                 text: "已是最新：重查发现远端没有新提交，未做任何修改。",
                 onDismiss: { model.dismissUpdateResult() }
@@ -314,7 +335,7 @@ private struct ResultAreaView: View {
             )
         case .failed(let failure):
             ResultBanner(
-                level: .warning,
+                level: .failure,
                 icon: "xmark.circle",
                 text: "更新失败：\(failure.reason.displayName)。\(failure.recoveryDirection)",
                 onDismiss: { model.dismissUpdateResult() }
@@ -324,9 +345,12 @@ private struct ResultAreaView: View {
 }
 
 private struct ResultBanner: View {
+    /// 横幅语气分级：成功 / 进行中 / 警示 / 失败；颜色是状态提示之一，图标与文案为并存的静态提示。
     enum Level {
-        case info
+        case success
+        case running
         case warning
+        case failure
     }
 
     let level: Level
@@ -336,26 +360,42 @@ private struct ResultBanner: View {
 
     private var color: Color {
         switch level {
-        case .info: return .green
-        case .warning: return .orange
+        case .success: return DesignTokens.Status.ok
+        case .running: return DesignTokens.Status.running
+        case .warning: return DesignTokens.Status.warning
+        case .failure: return DesignTokens.Status.error
         }
     }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: DesignTokens.Space.block) {
             Image(systemName: icon)
                 .foregroundStyle(color)
             Text(text)
-                .font(.callout)
+                .font(DesignTokens.Fonts.rowTitle)
+                // 横幅文案含恢复指引，必须完整可读，不截断
+                .fixedSize(horizontal: false, vertical: true)
             Spacer()
             if let onDismiss {
                 Button("关闭", systemImage: "xmark", action: onDismiss)
                     .labelStyle(.iconOnly)
-                    .buttonStyle(.plain)
+                    .buttonStyle(.pressFeedback)
+                    .frame(
+                        width: DesignTokens.Size.bannerDismissHotspot,
+                        height: DesignTokens.Size.bannerDismissHotspot
+                    )
+                    .contentShape(Rectangle())
             }
         }
-        .padding(10)
-        .background(color.opacity(0.10))
+        .padding(DesignTokens.Space.cardPadding)
+        .background(
+            DesignTokens.Surface.bannerTint(color),
+            in: RoundedRectangle(cornerRadius: DesignTokens.Radius.card)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: DesignTokens.Radius.card)
+                .strokeBorder(DesignTokens.Surface.bannerStroke(color), lineWidth: 1)
+        }
     }
 }
 
@@ -387,10 +427,10 @@ private struct UpdateConfirmationSheet: View {
     var preselectedCheckoutPath: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.section) {
             HStack {
                 Text("更新 \(skill.displayName)")
-                    .font(.title2.bold())
+                    .font(DesignTokens.Fonts.panelTitle)
                 Spacer()
                 Button("关闭") { dismiss() }
                     .keyboardShortcut(.cancelAction)
@@ -398,8 +438,8 @@ private struct UpdateConfirmationSheet: View {
 
             if eligibleCheckoutPaths.count > 1 {
                 Text("该来源有 \(eligibleCheckoutPaths.count) 个可更新检出。当次选择一个，不持久化。")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .font(DesignTokens.Fonts.rowTitle)
+                    .foregroundStyle(DesignTokens.Status.neutral)
                 Picker("目标检出", selection: $selectedCheckoutPath) {
                     ForEach(eligibleCheckoutPaths, id: \.self) { path in
                         Text(path).tag(Optional(path))
@@ -408,13 +448,13 @@ private struct UpdateConfirmationSheet: View {
                 .pickerStyle(.radioGroup)
             } else {
                 Text("目标检出：\(eligibleCheckoutPaths.first ?? "Unknown")")
-                    .font(.callout.monospaced())
-                    .foregroundStyle(.secondary)
+                    .font(DesignTokens.Fonts.evidenceBody)
+                    .foregroundStyle(DesignTokens.Status.neutral)
             }
 
             Text("确认后 Pagugu 会先 fetch 并重查该检出，再给出精确计划。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(DesignTokens.Fonts.caption)
+                .foregroundStyle(DesignTokens.Status.neutral)
 
             HStack {
                 Spacer()
@@ -432,7 +472,7 @@ private struct UpdateConfirmationSheet: View {
                     }
                 } label: {
                     if isPreparing {
-                        HStack(spacing: 6) {
+                        HStack(spacing: DesignTokens.Space.row) {
                             ProgressView().controlSize(.small)
                             Text("正在重查…")
                         }
@@ -444,7 +484,7 @@ private struct UpdateConfirmationSheet: View {
                 .disabled(isPreparing)
             }
         }
-        .padding(20)
+        .padding(DesignTokens.Space.sheetPadding)
         .frame(minWidth: 560, minHeight: 240)
         .onAppear {
             selectedCheckoutPath = preselectedCheckoutPath ?? eligibleCheckoutPaths.first
@@ -461,60 +501,60 @@ private struct PreparedUpdateSheet: View {
     @State private var isExecuting = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.section) {
             HStack {
                 Text("确认更新")
-                    .font(.title2.bold())
+                    .font(DesignTokens.Fonts.panelTitle)
                 Spacer()
                 Button("关闭") { Task { await model.cancelUpdate(); dismiss() } }
                     .keyboardShortcut(.cancelAction)
             }
 
             GroupBox("计划") {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: DesignTokens.Space.row) {
                     LabeledContent("Skill") {
                         Text("\(plan.skillIdentity.sourceKey.registryValue) · \(plan.skillIdentity.repositoryRelativePath.isEmpty ? "（仓库根目录）" : plan.skillIdentity.repositoryRelativePath)")
-                            .font(.caption.monospaced())
+                            .font(DesignTokens.Fonts.evidence)
                             .textSelection(.enabled)
                             .multilineTextAlignment(.trailing)
                     }
                     LabeledContent("目标检出") {
                         Text(plan.checkoutCanonicalPath)
-                            .font(.caption.monospaced())
+                            .font(DesignTokens.Fonts.evidence)
                             .textSelection(.enabled)
                             .multilineTextAlignment(.trailing)
                     }
                     LabeledContent("分支 / upstream") {
                         Text("\(plan.branchName) / \(plan.upstreamRefName)")
-                            .font(.caption.monospaced())
+                            .font(DesignTokens.Fonts.evidence)
                             .textSelection(.enabled)
                             .multilineTextAlignment(.trailing)
                     }
                     LabeledContent("当前 HEAD → 目标") {
                         Text("\(String(plan.currentHeadSHA.prefix(7))) → \(String(plan.targetSHA.prefix(7)))")
-                            .font(.caption.monospaced())
+                            .font(DesignTokens.Fonts.evidence)
                             .textSelection(.enabled)
                             .multilineTextAlignment(.trailing)
                     }
                     LabeledContent("落后") {
                         Text("\(plan.behindCount) 个提交")
-                            .font(.caption)
+                            .font(DesignTokens.Fonts.caption)
                     }
                 }
             }
 
             Text(plan.impactStatement)
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                .font(DesignTokens.Fonts.rowTitle)
+                .foregroundStyle(DesignTokens.Status.neutral)
 
             if plan.affectedSkills.count > 1 {
                 GroupBox("影响范围") {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: DesignTokens.Space.inline) {
                         Text("同一仓库的 \(plan.affectedSkills.count) 个 Skill 将一起前进：")
-                            .font(.caption)
+                            .font(DesignTokens.Fonts.caption)
                         ForEach(plan.affectedSkills, id: \.identity.repositoryRelativePath) { affected in
                             Text("\(affected.displayName)（\(affected.identity.repositoryRelativePath.isEmpty ? "仓库根目录" : affected.identity.repositoryRelativePath)）")
-                                .font(.caption.monospaced())
+                                .font(DesignTokens.Fonts.evidence)
                                 .textSelection(.enabled)
                         }
                     }
@@ -539,7 +579,7 @@ private struct PreparedUpdateSheet: View {
                     }
                 } label: {
                     if isExecuting {
-                        HStack(spacing: 6) {
+                        HStack(spacing: DesignTokens.Space.row) {
                             ProgressView().controlSize(.small)
                             Text("正在执行…")
                         }
@@ -551,7 +591,7 @@ private struct PreparedUpdateSheet: View {
                 .disabled(isExecuting)
             }
         }
-        .padding(20)
+        .padding(DesignTokens.Space.sheetPadding)
         .frame(minWidth: 620, minHeight: 360)
     }
 }
@@ -573,10 +613,10 @@ private struct ProjectScanRootManagementView: View {
     let remove: (String) async -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.section) {
             HStack {
                 Text("扫描范围")
-                    .font(.title2.bold())
+                    .font(DesignTokens.Fonts.panelTitle)
                 Spacer()
                 Button("关闭") {
                     dismiss()
@@ -592,19 +632,19 @@ private struct ProjectScanRootManagementView: View {
                 )
             } else {
                 List(roots) { root in
-                    HStack(spacing: 12) {
+                    HStack(spacing: DesignTokens.Space.block) {
                         Image(systemName: root.isAvailable ? "folder" : "folder.badge.questionmark")
-                            .foregroundStyle(root.isAvailable ? Color.secondary : Color.orange)
+                            .foregroundStyle(root.isAvailable ? DesignTokens.Status.neutral : DesignTokens.Status.warning)
                             .accessibilityHidden(true)
 
-                        VStack(alignment: .leading, spacing: 3) {
+                        VStack(alignment: .leading, spacing: DesignTokens.Space.tight) {
                             Text(root.asFoundPath)
-                                .font(.body.monospaced())
+                                .font(DesignTokens.Fonts.evidenceBody)
                                 .textSelection(.enabled)
                             if let reason = root.unavailableReason {
                                 Text("不可用：\(reason)。路径恢复后会自动复活。")
-                                    .font(.caption)
-                                    .foregroundStyle(.orange)
+                                    .font(DesignTokens.Fonts.caption)
+                                    .foregroundStyle(DesignTokens.Status.warning)
                             }
                         }
 
@@ -621,8 +661,8 @@ private struct ProjectScanRootManagementView: View {
 
             HStack {
                 Text("删除只移除主张记录，不会触碰目录、Skill Source 或 Git 工作树。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(DesignTokens.Fonts.caption)
+                    .foregroundStyle(DesignTokens.Status.neutral)
                 Spacer()
                 Button("添加 Project Scan Root", systemImage: "plus") {
                     add()
@@ -630,7 +670,7 @@ private struct ProjectScanRootManagementView: View {
                 .buttonStyle(.borderedProminent)
             }
         }
-        .padding(20)
+        .padding(DesignTokens.Space.sheetPadding)
         .frame(minWidth: 660, minHeight: 420)
     }
 }
@@ -646,10 +686,10 @@ private struct RegistryRecoveryView: View {
         ContentUnavailableView {
             Label("App Registry 需要恢复", systemImage: "exclamationmark.lock")
         } description: {
-            VStack(spacing: 8) {
+            VStack(spacing: DesignTokens.Space.block) {
                 Text(description)
                 Text(recovery.evidenceURL.path)
-                    .font(.body.monospaced())
+                    .font(DesignTokens.Fonts.evidenceBody)
                     .textSelection(.enabled)
             }
         } actions: {
@@ -708,16 +748,18 @@ private struct SkillDirectoryListView: View {
                     if !readModel.issues.isEmpty {
                         Section {
                             ForEach(readModel.issues, id: \.path) { issue in
-                                VStack(alignment: .leading, spacing: 2) {
+                                VStack(alignment: .leading, spacing: DesignTokens.Space.tight) {
                                     Label("扫描问题", systemImage: "exclamationmark.triangle")
-                                        .font(.caption)
-                                        .foregroundStyle(.orange)
+                                        .font(DesignTokens.Fonts.caption)
+                                        .foregroundStyle(DesignTokens.Status.warning)
                                     Text(issue.path)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
+                                        .font(DesignTokens.Fonts.captionSmall)
+                                        .foregroundStyle(DesignTokens.Status.neutral)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
                                     Text(issue.reason)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
+                                        .font(DesignTokens.Fonts.captionSmall)
+                                        .foregroundStyle(DesignTokens.Status.neutral)
                                 }
                             }
                         }
@@ -776,37 +818,44 @@ private struct SkillSourceRow: View {
     let onToggle: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.tight) {
+            HStack(spacing: DesignTokens.Space.row) {
                 Button(action: onToggle) {
                     Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 18, height: 18)
+                        .font(DesignTokens.Fonts.disclosure)
+                        .foregroundStyle(DesignTokens.Status.neutral)
+                        .frame(
+                            width: DesignTokens.Size.disclosureHotspot,
+                            height: DesignTokens.Size.disclosureHotspot
+                        )
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.pressFeedback)
                 .accessibilityLabel(isCollapsed ? "展开" : "收起")
 
                 Text(source.displayName)
-                    .font(.headline)
+                    .font(DesignTokens.Fonts.heading)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 Spacer()
                 HostLogoSlots(hosts: source.hosts)
             }
             if let statusPhrase {
                 Text(statusPhrase)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, 24)
+                    .font(DesignTokens.Fonts.caption)
+                    .foregroundStyle(DesignTokens.Status.neutral)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.leading, DesignTokens.Size.childIndent)
             }
             Text(source.id.displayString)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .font(DesignTokens.Fonts.captionSmall)
+                .foregroundStyle(DesignTokens.Status.neutral)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .padding(.leading, 24)
+                .padding(.leading, DesignTokens.Size.childIndent)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, DesignTokens.Space.rowVertical)
     }
 }
 
@@ -816,21 +865,25 @@ private struct SkillRow: View {
     let entry: SkillDirectoryEntry
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.tight) {
             HStack {
                 Text(entry.displayName)
-                    .font(.callout)
+                    .font(DesignTokens.Fonts.rowTitle)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 Spacer()
                 HostLogoSlots(hosts: entry.hosts)
             }
             if entry.id.repositoryRelativePath != entry.displayName {
                 Text(entry.id.repositoryRelativePath.isEmpty ? "（仓库根目录）" : entry.id.repositoryRelativePath)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .font(DesignTokens.Fonts.captionSmall)
+                    .foregroundStyle(DesignTokens.Status.neutral)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
         }
-        .padding(.leading, 24)
-        .padding(.vertical, 2)
+        .padding(.leading, DesignTokens.Size.childIndent)
+        .padding(.vertical, DesignTokens.Space.rowVertical)
     }
 }
 
@@ -843,16 +896,18 @@ private struct UnattributedInstallationRow: View {
     @State private var mappingPathToDelete: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.tight) {
+            HStack(spacing: DesignTokens.Space.row) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                    .font(DesignTokens.Fonts.caption)
+                    .foregroundStyle(DesignTokens.Status.warning)
                 Text(item.displayName)
-                    .font(.callout)
+                    .font(DesignTokens.Fonts.rowTitle)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 Text("来源不明")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                    .font(DesignTokens.Fonts.caption)
+                    .foregroundStyle(DesignTokens.Status.warning)
                 Spacer()
                 HostLogoSlots(hosts: item.hosts)
                 if item.installations.contains(where: {
@@ -879,12 +934,12 @@ private struct UnattributedInstallationRow: View {
             Text(item.installations.count > 1
                  ? "\(item.installations.count) 个安装位置"
                  : (item.installations.first?.asFoundPath ?? item.canonicalPath))
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .font(DesignTokens.Fonts.captionSmall)
+                .foregroundStyle(DesignTokens.Status.neutral)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, DesignTokens.Space.rowVertical)
         .alert(
             "确认删除来源映射？",
             isPresented: Binding(
@@ -910,15 +965,16 @@ private struct InvalidSourceMappingRow: View {
     @State private var showsDeleteConfirmation = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.inline) {
             Label("来源映射失效", systemImage: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
+                .font(DesignTokens.Fonts.caption)
+                .foregroundStyle(DesignTokens.Status.warning)
             Text(mapping.installationCanonicalPath)
-                .font(.caption2.monospaced())
+                .font(DesignTokens.Fonts.evidence)
                 .lineLimit(1)
                 .truncationMode(.middle)
             Button("删除映射", role: .destructive) { showsDeleteConfirmation = true }
-                .font(.caption)
+                .font(DesignTokens.Fonts.caption)
         }
         .alert("确认删除来源映射？", isPresented: $showsDeleteConfirmation) {
             Button("取消", role: .cancel) {}
@@ -937,11 +993,21 @@ private struct HostLogoSlots: View {
     let hosts: Set<AgentHost>
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: DesignTokens.Space.inline) {
             ForEach(AgentHost.allCases, id: \.self) { host in
                 HostLogoDot(host: host, isActive: hosts.contains(host))
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilitySummary)
+    }
+
+    private var accessibilitySummary: String {
+        AgentHost.allCases
+            .map { host in
+                host.displayName + (hosts.contains(host) ? "已安装" : "未安装")
+            }
+            .joined(separator: "，")
     }
 }
 
@@ -949,11 +1015,17 @@ private struct HostLogoDot: View {
     let host: AgentHost
     let isActive: Bool
 
+    // 占位槽位：已安装 = 实心，未安装 = 描边；形状与填充双重静态提示，不依赖单一透明度，明暗两态可辨。
     var body: some View {
         Circle()
-            .fill(isActive ? Color.primary : Color.secondary)
-            .opacity(isActive ? 1.0 : 0.3)
-            .frame(width: 8, height: 8)
+            .fill(isActive ? Color.primary : .clear)
+            .overlay {
+                if !isActive {
+                    Circle()
+                        .strokeBorder(DesignTokens.Status.neutral, lineWidth: 1)
+                }
+            }
+            .frame(width: DesignTokens.Size.hostLogoDot, height: DesignTokens.Size.hostLogoDot)
             .help(host.displayName + (isActive ? "（已安装）" : "（未安装）"))
     }
 }
@@ -966,43 +1038,41 @@ private struct SkillSourcePanel: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.section) {
+                VStack(alignment: .leading, spacing: DesignTokens.Space.block) {
                     Text(source.displayName)
-                        .font(.title2.bold())
+                        .font(DesignTokens.Fonts.panelTitle)
                     HostLogoSlots(hosts: source.hosts)
                 }
 
-                Divider()
-
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: DesignTokens.Space.inline) {
                     Text("包含的 Skill（\(source.skills.count) 个）")
-                        .font(.headline)
+                        .font(DesignTokens.Fonts.heading)
                     ForEach(source.skills) { entry in
                         Button {
                             onSelectSkill(entry.id)
                         } label: {
                             HStack {
                                 Text(entry.displayName)
-                                    .font(.body)
+                                    .font(DesignTokens.Fonts.body)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
                                 Spacer()
                                 Image(systemName: "chevron.right")
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
+                                    .font(DesignTokens.Fonts.disclosure)
+                                    .foregroundStyle(DesignTokens.Status.neutral)
                             }
                             .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.pressFeedback)
                     }
                 }
-
-                Divider()
 
                 SourceIdentityBlock(sourceKey: source.id, repositoryRelativePath: nil)
 
                 Spacer()
             }
-            .padding()
+            .padding(DesignTokens.Space.section)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -1022,14 +1092,12 @@ private struct SkillDetailPanel: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.section) {
+                VStack(alignment: .leading, spacing: DesignTokens.Space.block) {
                     Text(entry.displayName)
-                        .font(.title2.bold())
+                        .font(DesignTokens.Fonts.panelTitle)
                     HostLogoSlots(hosts: entry.hosts)
                 }
-
-                Divider()
 
                 CheckoutStatusBlock(
                     checkouts: checkouts,
@@ -1039,25 +1107,17 @@ private struct SkillDetailPanel: View {
                     startUpdate: startUpdate
                 )
 
-                Divider()
-
                 InstallationsBlock(
                     installations: entry.installations,
                     deleteMapping: deleteMapping
                 )
-
-                Divider()
 
                 SourceIdentityBlock(
                     sourceKey: entry.id.sourceKey,
                     repositoryRelativePath: entry.id.repositoryRelativePath
                 )
 
-                Divider()
-
                 MarkdownSourceBlock(markdown: markdown)
-
-                Divider()
 
                 UpdateActionBlock(
                     checkouts: checkouts,
@@ -1069,7 +1129,7 @@ private struct SkillDetailPanel: View {
 
                 Spacer()
             }
-            .padding()
+            .padding(DesignTokens.Space.section)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -1085,9 +1145,9 @@ private struct CheckoutStatusBlock: View {
     let startUpdate: (String?) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.block) {
             Text("状态与检出")
-                .font(.headline)
+                .font(DesignTokens.Fonts.heading)
             ForEach(checkouts) { checkout in
                 CheckoutCard(
                     checkout: checkout,
@@ -1115,24 +1175,24 @@ private struct UpdateActionBlock: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.block) {
             Text("更新动作")
-                .font(.headline)
+                .font(DesignTokens.Fonts.heading)
             if eligibleCheckouts.isEmpty {
                 Text("当前没有可更新的检出。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(DesignTokens.Fonts.caption)
+                    .foregroundStyle(DesignTokens.Status.neutral)
             } else {
                 Text(eligibleCheckouts.count == 1
                      ? "1 个检出可更新。"
                      : "\(eligibleCheckouts.count) 个检出可更新；确认时当次选择一个，不持久化。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(DesignTokens.Fonts.caption)
+                    .foregroundStyle(DesignTokens.Status.neutral)
                 Button {
                     startUpdate(nil)
                 } label: {
                     if isPreparingUpdate {
-                        HStack(spacing: 6) {
+                        HStack(spacing: DesignTokens.Space.row) {
                             ProgressView().controlSize(.small)
                             Text("正在重查…")
                         }
@@ -1165,20 +1225,22 @@ private struct CheckoutCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.row) {
             HStack {
+                // 状态名 + 语义状态色（静态提示之一），rawValue 保持无色以便区分
                 Text(checkout.state.displayName)
-                    .font(.headline)
+                    .font(DesignTokens.Fonts.heading)
+                    .foregroundStyle(DesignTokens.statusColor(for: checkout.state))
                 Text(checkout.state.rawValue)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
+                    .font(DesignTokens.Fonts.evidence)
+                    .foregroundStyle(DesignTokens.Status.neutral)
                 Spacer()
                 if isEligible {
                     Button {
                         startUpdate?(checkout.id)
                     } label: {
                         if isPreparingUpdate {
-                            HStack(spacing: 4) {
+                            HStack(spacing: DesignTokens.Space.inline) {
                                 ProgressView().controlSize(.mini)
                                 Text("重查中…")
                             }
@@ -1192,20 +1254,20 @@ private struct CheckoutCard: View {
                 }
             }
             Text(checkout.state.recoveryDirection)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(DesignTokens.Fonts.caption)
+                .foregroundStyle(DesignTokens.Status.neutral)
             if checkout.isChecking {
                 Label("检查中", systemImage: "arrow.triangle.2.circlepath")
-                    .font(.caption)
-                    .foregroundStyle(.blue)
+                    .font(DesignTokens.Fonts.caption)
+                    .foregroundStyle(DesignTokens.Status.running)
             }
             if let outcome = checkout.checkOutcome {
                 checkOutcome(outcome)
             }
             if checkout.observation?.result == .failure, checkout.checkOutcome == nil {
                 Text(CheckRunFailure.fetchFailed.message)
-                    .font(.caption)
-                    .foregroundStyle(.red)
+                    .font(DesignTokens.Fonts.caption)
+                    .foregroundStyle(DesignTokens.Status.error)
             }
             if let observation = checkout.observation {
                 fact("观察时间", observation.completedAt.formatted(date: .abbreviated, time: .standard))
@@ -1223,8 +1285,11 @@ private struct CheckoutCard: View {
                 fact("检查错误", failureText(failure))
             }
         }
-        .padding(10)
-        .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 8))
+        .padding(DesignTokens.Space.cardPadding)
+        .background(
+            DesignTokens.Surface.card,
+            in: RoundedRectangle(cornerRadius: DesignTokens.Radius.card)
+        )
     }
 
     @ViewBuilder
@@ -1234,23 +1299,23 @@ private struct CheckoutCard: View {
             EmptyView()
         case .notApplicable:
             Text("本次检查：不适用")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(DesignTokens.Fonts.caption)
+                .foregroundStyle(DesignTokens.Status.neutral)
         case .failed(let reason):
             Text(reason.message)
-                .font(.caption)
-                .foregroundStyle(.red)
+                .font(DesignTokens.Fonts.caption)
+                .foregroundStyle(DesignTokens.Status.error)
         case .discarded:
             Text("检查期间检出身份已变化。本次观察已丢弃；请重新检查。")
-                .font(.caption)
-                .foregroundStyle(.orange)
+                .font(DesignTokens.Fonts.caption)
+                .foregroundStyle(DesignTokens.Status.warning)
         }
     }
 
     private func fact(_ name: String, _ value: String) -> some View {
         LabeledContent(name) {
             Text(value)
-                .font(.caption.monospaced())
+                .font(DesignTokens.Fonts.evidence)
                 .textSelection(.enabled)
                 .multilineTextAlignment(.trailing)
         }
@@ -1320,42 +1385,36 @@ private struct UnattributedInstallationPanel: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.section) {
+                VStack(alignment: .leading, spacing: DesignTokens.Space.block) {
                     Text(item.displayName)
-                        .font(.title2.bold())
+                        .font(DesignTokens.Fonts.panelTitle)
                     HostLogoSlots(hosts: item.hosts)
                 }
 
-                Divider()
-
                 InstallationsBlock(installations: item.installations)
 
-                Divider()
-
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: DesignTokens.Space.inline) {
                     Text("来源标识")
-                        .font(.headline)
+                        .font(DesignTokens.Fonts.heading)
                     Text("来源不明")
-                        .font(.body)
-                        .foregroundStyle(.orange)
+                        .font(DesignTokens.Fonts.body)
+                        .foregroundStyle(DesignTokens.Status.warning)
                     Text("复制投影未关联任何已发现 Skill Source；不参与更新。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(DesignTokens.Fonts.caption)
+                        .foregroundStyle(DesignTokens.Status.neutral)
                     if item.installations.count > 1 {
                         Text("内容完全一致的 \(item.installations.count) 个安装位置已聚合为一个条目（仍来源不明、不可更新）。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(DesignTokens.Fonts.caption)
+                            .foregroundStyle(DesignTokens.Status.neutral)
                     }
                 }
-
-                Divider()
 
                 MarkdownSourceBlock(markdown: markdown)
 
                 Spacer()
             }
-            .padding()
+            .padding(DesignTokens.Space.section)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -1369,42 +1428,42 @@ private struct InstallationsBlock: View {
     @State private var mappingPathToDelete: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.block) {
             Text("安装位置")
-                .font(.headline)
+                .font(DesignTokens.Fonts.heading)
             if installations.isEmpty {
                 Text("未安装到任何 Agent Host（仅在扫描范围内发现）。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(DesignTokens.Fonts.caption)
+                    .foregroundStyle(DesignTokens.Status.neutral)
             }
             ForEach(installations, id: \.asFoundPath) { installation in
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: DesignTokens.Space.tight) {
                     Text(installation.asFoundPath)
-                        .font(.body.monospaced())
+                        .font(DesignTokens.Fonts.evidenceBody)
                         .textSelection(.enabled)
                     // 软链接安装的解析目标（归因证据）；as-found 即 canonical 时不重复显示
                     if installation.canonicalPath != (installation.asFoundPath as NSString).expandingTildeInPath {
                         Text("→ \(installation.canonicalPath)")
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
+                            .font(DesignTokens.Fonts.evidence)
+                            .foregroundStyle(DesignTokens.Status.neutral)
                             .textSelection(.enabled)
                     }
-                    HStack(spacing: 6) {
+                    HStack(spacing: DesignTokens.Space.row) {
                         HostLogoSlots(hosts: installation.hosts)
                         Text(installation.projectionType.displayName + attributionNote(for: installation))
                     }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(DesignTokens.Fonts.caption)
+                    .foregroundStyle(DesignTokens.Status.neutral)
                     if let mapping = installation.sourceMapping {
                         switch mapping.validity {
                         case .invalid(let reason):
                             Text("映射失效：\(reason.message)")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
+                                .font(DesignTokens.Fonts.caption)
+                                .foregroundStyle(DesignTokens.Status.warning)
                         case .unverified:
                             Text("扫描不完整，暂不重验证该映射。")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .font(DesignTokens.Fonts.caption)
+                                .foregroundStyle(DesignTokens.Status.neutral)
                         case .valid:
                             EmptyView()
                         }
@@ -1413,7 +1472,7 @@ private struct InstallationsBlock: View {
                         Button("删除来源映射", role: .destructive) {
                             mappingPathToDelete = installation.canonicalPath
                         }
-                        .font(.caption)
+                        .font(DesignTokens.Fonts.caption)
                     }
                 }
             }
@@ -1453,18 +1512,18 @@ private struct SourceIdentityBlock: View {
     let repositoryRelativePath: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.inline) {
             Text("来源标识")
-                .font(.headline)
+                .font(DesignTokens.Fonts.heading)
             LabeledContent("Skill Source Key") {
                 Text(sourceKey.displayString)
-                    .font(.body.monospaced())
+                    .font(DesignTokens.Fonts.evidenceBody)
                     .textSelection(.enabled)
             }
             if let repositoryRelativePath {
                 LabeledContent("仓内相对路径") {
                     Text(repositoryRelativePath.isEmpty ? "（仓库根目录）" : repositoryRelativePath)
-                        .font(.body.monospaced())
+                        .font(DesignTokens.Fonts.evidenceBody)
                         .textSelection(.enabled)
                 }
             }
@@ -1478,20 +1537,23 @@ private struct MarkdownSourceBlock: View {
     let markdown: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.inline) {
             Text("SKILL.md 原文（只读）")
-                .font(.headline)
+                .font(DesignTokens.Fonts.heading)
             if let markdown {
                 Text(markdown)
-                    .font(.callout.monospaced())
+                    .font(DesignTokens.Fonts.markdown)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                    .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 6))
+                    .padding(DesignTokens.Space.block)
+                    .background(
+                        DesignTokens.Surface.inset,
+                        in: RoundedRectangle(cornerRadius: DesignTokens.Radius.inset)
+                    )
             } else {
                 Text("无法读取 SKILL.md。")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .font(DesignTokens.Fonts.rowTitle)
+                    .foregroundStyle(DesignTokens.Status.neutral)
             }
         }
     }
@@ -1514,14 +1576,14 @@ private struct SourceMappingSheet: View {
     @State private var query = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.block) {
             HStack {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: DesignTokens.Space.tight) {
                     Text("指定来源")
-                        .font(.title2.bold())
+                        .font(DesignTokens.Fonts.panelTitle)
                     Text(installation.asFoundPath)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
+                        .font(DesignTokens.Fonts.evidence)
+                        .foregroundStyle(DesignTokens.Status.neutral)
                 }
                 Spacer()
                 Button("关闭") { dismiss() }
@@ -1548,25 +1610,25 @@ private struct SourceMappingSheet: View {
                                         if created { dismiss() }
                                     }
                                 } label: {
-                                    VStack(alignment: .leading, spacing: 3) {
+                                    VStack(alignment: .leading, spacing: DesignTokens.Space.tight) {
                                         Text(target.displayName)
                                         Text(target.id.repositoryRelativePath.isEmpty
                                              ? "（仓库根目录）"
                                              : target.id.repositoryRelativePath)
-                                            .font(.caption.monospaced())
-                                            .foregroundStyle(.secondary)
+                                            .font(DesignTokens.Fonts.evidence)
+                                            .foregroundStyle(DesignTokens.Status.neutral)
                                         if target.displayName != displayName {
                                             Label(
                                                 "frontmatter name 不同；名称不参与身份，不阻断指定。",
                                                 systemImage: "exclamationmark.triangle"
                                             )
-                                            .font(.caption)
-                                            .foregroundStyle(.orange)
+                                            .font(DesignTokens.Fonts.caption)
+                                            .foregroundStyle(DesignTokens.Status.warning)
                                         }
                                     }
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(.pressFeedback)
                                 .accessibilityLabel("指定来源为 \(target.displayName)")
                             }
                         }
@@ -1575,7 +1637,7 @@ private struct SourceMappingSheet: View {
                 .searchable(text: $query, prompt: "筛选 Skill 或来源")
             }
         }
-        .padding(20)
+        .padding(DesignTokens.Space.sheetPadding)
         .frame(minWidth: 680, minHeight: 480)
     }
 
@@ -1606,9 +1668,9 @@ private struct InvalidSourceMappingPanel: View {
         ContentUnavailableView {
             Label("来源映射失效", systemImage: "exclamationmark.triangle")
         } description: {
-            VStack(spacing: 8) {
+            VStack(spacing: DesignTokens.Space.block) {
                 Text(mapping.installationCanonicalPath)
-                    .font(.body.monospaced())
+                    .font(DesignTokens.Fonts.evidenceBody)
                     .textSelection(.enabled)
                 if case .invalid(let reason) = mapping.validity {
                     Text(reason.message)
@@ -1661,10 +1723,10 @@ private struct RecentActivitySheet: View {
     @State private var showsClearConfirmation = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.block) {
             HStack {
                 Text("最近活动")
-                    .font(.title2.bold())
+                    .font(DesignTokens.Fonts.panelTitle)
                 Spacer()
                 Button("关闭") { dismiss() }
                     .keyboardShortcut(.cancelAction)
@@ -1695,8 +1757,8 @@ private struct RecentActivitySheet: View {
 
             HStack {
                 Text("清空只删除历史记录，不影响 Skill、Registry 与 Git 仓库。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(DesignTokens.Fonts.caption)
+                    .foregroundStyle(DesignTokens.Status.neutral)
                 Spacer()
                 Button("清空历史", systemImage: "trash", role: .destructive) {
                     showsClearConfirmation = true
@@ -1704,7 +1766,7 @@ private struct RecentActivitySheet: View {
                 .disabled(history.items.isEmpty && !history.isUnavailable)
             }
         }
-        .padding(20)
+        .padding(DesignTokens.Space.sheetPadding)
         .frame(minWidth: 660, minHeight: 480)
         .alert("确认清空审计历史？", isPresented: $showsClearConfirmation) {
             Button("取消", role: .cancel) {}
@@ -1721,37 +1783,40 @@ private struct AuditActivityRow: View {
     let item: AuditActivityItem
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: DesignTokens.Space.block) {
             Text(item.title)
-                .font(.callout)
+                .font(DesignTokens.Fonts.rowTitle)
+                .lineLimit(1)
+                .truncationMode(.tail)
             if let identity = item.skillIdentity {
                 Text(identity.repositoryRelativePath.isEmpty
                      ? identity.sourceKey
                      : "\(identity.sourceKey)/\(identity.repositoryRelativePath)")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
+                    .font(DesignTokens.Fonts.evidence)
+                    .foregroundStyle(DesignTokens.Status.neutral)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
             Spacer()
             Text(item.outcomeDisplayName)
-                .font(.caption)
+                .font(DesignTokens.Fonts.caption)
                 .foregroundStyle(outcomeColor)
             Text(item.recordedAt.formatted(date: .abbreviated, time: .standard))
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .font(DesignTokens.Fonts.captionSmall)
+                .foregroundStyle(DesignTokens.Status.neutral)
+                .lineLimit(1)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, DesignTokens.Space.rowVertical)
     }
 
     private var outcomeColor: Color {
         switch item.outcome {
-        case .interruptedUnknown: return .orange
+        case .interruptedUnknown: return DesignTokens.Status.warning
         case .record(let outcome):
             switch outcome {
-            case .success, .complete, .created: return .green
-            case .partial, .cancelled: return .orange
-            case .failed, .deleted: return .red
+            case .success, .complete, .created: return DesignTokens.Status.ok
+            case .partial, .cancelled: return DesignTokens.Status.warning
+            case .failed, .deleted: return DesignTokens.Status.error
             }
         }
     }
@@ -1762,11 +1827,11 @@ private struct AuditRecordDetailView: View {
     let openSkill: (String, String) -> Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.block) {
             Label("当时记录：以下为该动作发生时的历史快照，不代表当前实时状态。",
                   systemImage: "clock.arrow.circlepath")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(DesignTokens.Fonts.caption)
+                .foregroundStyle(DesignTokens.Status.neutral)
 
             LabeledContent("动作") { detailText(item.title) }
             LabeledContent("时间") {
@@ -1820,24 +1885,27 @@ private struct AuditRecordDetailView: View {
                let reason = UpdateRunFailureReason(rawValue: reasonCode) {
                 LabeledContent("原因") { detailText(reason.displayName) }
                 Text(reason.recoveryDirection)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(DesignTokens.Fonts.caption)
+                    .foregroundStyle(DesignTokens.Status.neutral)
             }
 
             if item.action == .updateRun, let identity = item.skillIdentity {
                 Button("查看相关 Skill") {
                     _ = openSkill(identity.sourceKey, identity.repositoryRelativePath)
                 }
-                .font(.callout)
+                .font(DesignTokens.Fonts.rowTitle)
             }
         }
-        .padding(12)
-        .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 8))
+        .padding(DesignTokens.Space.cardPadding)
+        .background(
+            DesignTokens.Surface.card,
+            in: RoundedRectangle(cornerRadius: DesignTokens.Radius.card)
+        )
     }
 
     private func detailText(_ value: String) -> some View {
         Text(value)
-            .font(.caption.monospaced())
+            .font(DesignTokens.Fonts.evidence)
             .textSelection(.enabled)
             .multilineTextAlignment(.trailing)
     }
