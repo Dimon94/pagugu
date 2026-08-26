@@ -4,8 +4,8 @@ import Foundation
 // OUTPUT: AppModel UI intent/只读投影，以及只供 composition root 注入的 RegistryResetting reset seam。
 // POS: AppModel 模块（ADR-0009 §7）。@MainActor composition root：
 //      owns Skill Read Model、受限恢复与来源映射错误投影、目录收起、Check/Update 瞬态、全部 UI intent
-//      与启动/刷新编排；每次发布按实时事实重推导观察 freshness。取消确认后，目标检出在新的成功检查前
-//      不再消费旧观察。审计历史投影只服务「最近活动」呈现；
+//      与启动/刷新编排；每次发布按实时事实重推导观察 freshness。取消确认或更新失败后，目标检出
+//      在新的成功检查前不再消费旧观察。审计历史投影只服务「最近活动」呈现；
 //      Registry reset 成功后呈现 quarantine 备份路径；受限恢复「退出自行修复」经 requestQuit 发出应用退出 intent。
 //      does not own 直接 Git/文件系统/持久 IO
 //      （经 Git/Discovery/Registry/Audit/Runs seam）、
@@ -98,8 +98,8 @@ final class AppModel: ObservableObject {
     private var checkScope: [CheckRunTarget] = []
     private var checkRunTargetsByPath: [String: CheckRunTarget] = [:]
     private var checkItemOutcomes: [String: CheckRunItemOutcome] = [:]
-    /// 用户取消确认后，旧观察不能再次解锁可更新；新的成功检查才移除此瞬态约束。
-    private var checkoutPathsRequiringCheckAfterCancellation: Set<String> = []
+    /// 用户取消确认或 Update Run 失败后，旧观察不能再次解锁可更新；新的成功检查才移除此瞬态约束。
+    private var checkoutPathsRequiringNewCheck: Set<String> = []
 
     init(
         personalRoots: [String] = Discovery.personalSkillRoots,
@@ -178,7 +178,7 @@ final class AppModel: ObservableObject {
             factsByCheckoutPath[updateRunFacts.checkoutPath] = updateRunFacts
         }
         let observations = await registry.checkoutObservations().filter { checkoutPath, _ in
-            !checkoutPathsRequiringCheckAfterCancellation.contains(checkoutPath)
+            !checkoutPathsRequiringNewCheck.contains(checkoutPath)
         }
         for source in contents.sources {
             for checkout in source.checkouts {
@@ -325,7 +325,7 @@ final class AppModel: ObservableObject {
             case .item(let item, let progress):
                 checkItemOutcomes[item.checkoutPath] = item.outcome
                 if item.outcome == .success {
-                    checkoutPathsRequiringCheckAfterCancellation.remove(item.checkoutPath)
+                    checkoutPathsRequiringNewCheck.remove(item.checkoutPath)
                 }
                 checkRunProgress = progress
                 await publishDiscovery()
@@ -353,10 +353,11 @@ final class AppModel: ObservableObject {
 
     // L4 IN: Skill Identity 与 checkoutPath 必须来自当前完整 Read Model 的 Eligible 候选。
     // OUT: 重查 noop/阻断先发布事实刷新，再发布结果；ready 发布 pendingUpdatePlan。选择不持久化。
-    // FAIL: stale intent 抛合同错误；运行失败发布稳定 UpdateRunFailure，并按实时事实刷新投影。
-    // TEST: repo://PaguguTests/AppModelTests.swift（候选、计划事实、noop/阻断/失败刷新链路）。
+    // FAIL: stale intent 抛合同错误；运行失败发布稳定 UpdateRunFailure，标记目标检出需重新检查，
+    //       并按实时事实刷新投影。
+    // TEST: repo://PaguguTests/AppModelTests.swift（候选、计划事实、noop/阻断、失败后旧观察禁用链路）。
     // L6 CHAIN: Runs fetch 重查 → ready 等待确认；或 noop/阻断重读事实 → 完整 Discovery 发布 → 释放互斥。
-    //             重查失败 → 结果发布 → 完整 Discovery；旧观察仅按 canonical freshness 合同失效。
+    //             重查失败 → 标记目标检出需重新检查 → 结果发布 → 完整 Discovery；新的成功检查解除标记。
     func prepareUpdate(skillIdentity: SkillIdentity, checkoutPath: String) async throws {
         guard activeRun == nil else { throw UpdateRunContractError.runInProgress }
         guard eligibleUpdateCheckoutPaths(for: skillIdentity).contains(checkoutPath),
@@ -411,6 +412,7 @@ final class AppModel: ObservableObject {
             }
         } catch let failure as UpdateRunFailure {
             pendingUpdatePlan = nil
+            checkoutPathsRequiringNewCheck.insert(checkoutPath)
             updateResult = .failed(failure)
             await publishDiscovery()
             activeRun = nil
@@ -425,9 +427,10 @@ final class AppModel: ObservableObject {
     // L4 IN: pendingUpdatePlan 必须仍是用户当前确认的冻结计划。
     // OUT: 首次 await 前原子转入 executing 并清除可取消 plan；成功结果先发布，再以
     //      post-verify 一次性事实执行完整 Discovery 刷新；刷新失败独立投影。
-    // FAIL: 运行失败发布稳定 UpdateRunFailure，并按实时事实刷新投影；不重试、不回滚。
-    // TEST: repo://PaguguTests/AppModelTests.swift（成功、失败后旧 Observation、刷新失败隔离）。
-    // L6 CHAIN: 成功发布 post-verify 事实；执行失败发布结果后完整 Discovery，旧观察仅按 freshness 失效。
+    // FAIL: 运行失败发布稳定 UpdateRunFailure，标记目标检出需重新检查并刷新投影；不重试、不回滚。
+    // TEST: repo://PaguguTests/AppModelTests.swift（成功、失败后旧 Observation 禁用、刷新失败隔离）。
+    // L6 CHAIN: 成功发布 post-verify 事实；执行失败标记目标检出需重新检查 → 发布结果 → 完整 Discovery；
+    //           新的成功检查解除标记。
     func confirmUpdate() async throws {
         guard activeRun == .updateAwaitingConfirmation else {
             throw activeRun == nil ? UpdateRunContractError.invalidRequest : .runInProgress
@@ -469,6 +472,7 @@ final class AppModel: ObservableObject {
             activeRun = nil
         } catch let failure as UpdateRunFailure {
             pendingUpdatePlan = nil
+            checkoutPathsRequiringNewCheck.insert(plan.checkoutCanonicalPath)
             updateResult = .failed(failure)
             auditHistory = await audit.history()
             await publishDiscovery()
@@ -491,7 +495,7 @@ final class AppModel: ObservableObject {
         guard activeRun == .updateAwaitingConfirmation, let plan = pendingUpdatePlan else { return }
         activeRun = .updateCancelling
         pendingUpdatePlan = nil
-        checkoutPathsRequiringCheckAfterCancellation.insert(plan.checkoutCanonicalPath)
+        checkoutPathsRequiringNewCheck.insert(plan.checkoutCanonicalPath)
         let runner = UpdateRunner(
             gitInspector: gitInspector,
             gitExecutor: gitExecutor,

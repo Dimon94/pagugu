@@ -1195,6 +1195,38 @@ final class AppModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPrepareUpdateFetchFailureWithUnchangedTipRequiresNewCheckWithoutDeletingObservation() async throws {
+        let observedTip = String(repeating: "a", count: 40)
+        let fixture = try await makeObservedUpdateFixture(
+            name: "failed-prepare-unchanged-tip",
+            headSHA: String(repeating: "b", count: 40),
+            observedTipSHA: observedTip,
+            failFetch: true
+        )
+        let (model, source, selected, checkoutPath) = fixture
+        XCTAssertEqual(model.readModel.checkoutCards(for: source.id).first?.state, .updateAvailable)
+
+        try await model.prepareUpdate(skillIdentity: selected, checkoutPath: checkoutPath)
+
+        XCTAssertEqual(model.updateResult, .failed(UpdateRunFailure(reason: .fetchFailure)))
+        var card = try XCTUnwrap(model.readModel.checkoutCards(for: source.id).first)
+        XCTAssertEqual(card.state, .checkUnknown, "fetch 失败后不得继续消费仍 fresh 的入口观察")
+        XCTAssertNil(card.observation)
+        XCTAssertTrue(model.eligibleUpdateCheckoutPaths(for: selected).isEmpty)
+        guard case .ready(let retained) = await Persistence(
+            directoryURL: tmp.appendingPathComponent("failed-prepare-unchanged-tip-data")
+        ).loadRegistry() else {
+            return XCTFail("Registry 应保持可读")
+        }
+        XCTAssertEqual(retained.checkoutObservations[checkoutPath]?.remoteTipSHA, observedTip)
+
+        await model.rescan()
+        card = try XCTUnwrap(model.readModel.checkoutCards(for: source.id).first)
+        XCTAssertEqual(card.state, .checkUnknown, "重新扫描不得恢复失败前的可更新状态")
+        XCTAssertTrue(model.eligibleUpdateCheckoutPaths(for: selected).isEmpty)
+    }
+
+    @MainActor
     func testPrepareUpdateBlockedPublishesBlockingStateAndRecovery() async throws {
         let fixture = try await makeObservedUpdateFixture(
             name: "blocked-prepare",
@@ -1238,6 +1270,40 @@ final class AppModelTests: XCTestCase {
         await model.rescan()
         XCTAssertEqual(model.readModel.checkoutCards(for: source.id).first?.state, .checkUnknown)
         XCTAssertTrue(model.eligibleUpdateCheckoutPaths(for: selected).isEmpty)
+    }
+
+    @MainActor
+    func testConfirmUpdateFastForwardFailureWithUnchangedTipRequiresNewCheckWithoutDeletingObservation() async throws {
+        let observedTip = String(repeating: "c", count: 40)
+        let fixture = try await makeObservedUpdateFixture(
+            name: "failed-confirm-unchanged-tip",
+            headSHA: String(repeating: "d", count: 40),
+            observedTipSHA: observedTip,
+            failFastForward: true
+        )
+        let (model, source, selected, checkoutPath) = fixture
+        try await model.prepareUpdate(skillIdentity: selected, checkoutPath: checkoutPath)
+
+        try await model.confirmUpdate()
+
+        XCTAssertEqual(model.updateResult, .failed(UpdateRunFailure(reason: .commandFailure)))
+        var card = try XCTUnwrap(model.readModel.checkoutCards(for: source.id).first)
+        XCTAssertEqual(card.state, .checkUnknown, "ff-only 失败后不得继续消费仍 fresh 的入口观察")
+        XCTAssertNil(card.observation)
+        XCTAssertTrue(model.eligibleUpdateCheckoutPaths(for: selected).isEmpty)
+        guard case .ready(let retained) = await Persistence(
+            directoryURL: tmp.appendingPathComponent("failed-confirm-unchanged-tip-data")
+        ).loadRegistry() else {
+            return XCTFail("Registry 应保持可读")
+        }
+        XCTAssertEqual(retained.checkoutObservations[checkoutPath]?.remoteTipSHA, observedTip)
+
+        await model.rescan()
+        card = try XCTUnwrap(model.readModel.checkoutCards(for: source.id).first)
+        XCTAssertEqual(card.state, .checkUnknown, "重新扫描不得恢复失败前的可更新状态")
+        await model.checkNow()
+        card = try XCTUnwrap(model.readModel.checkoutCards(for: source.id).first)
+        XCTAssertEqual(card.state, .updateAvailable, "新的成功检查才恢复更新判断")
     }
 
     @MainActor
