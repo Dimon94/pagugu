@@ -7,7 +7,7 @@ import Foundation
 // POS: Persistence 物理 owner。只依赖 Foundation，不拥有主张语义。
 // TEST: repo://PaguguTests/PersistenceTests.swift、repo://PaguguTests/CheckRunTests.swift。
 
-// L5 PARAM: Registry/Audit schemaVersion 当前只接受 1；Audit FIFO 上限 200。
+// L5 PARAM: Registry schemaVersion 只接受 JSON 整数字面量 1；Audit schemaVersion 当前只接受 1；Audit FIFO 上限 200。
 // Audit action 为 source-mapping / check-run / update-run；Update start 无 outcome，terminal 使用 success/cancelled/failed；
 // failed reason 只接受审计 schema 列出的九个稳定 wire code，并由测试锁定为 Runs 的同一 rawValue 集合。
 // Registry 顶层恰好编码三类集合；未知字段可忽略且重写不保留。
@@ -419,10 +419,6 @@ private enum RegistryValidationError: Error {
     case invalidCheckoutObservation
 }
 
-private struct RegistrySchemaHeader: Decodable {
-    let schemaVersion: Int
-}
-
 private enum AuditValidationError: Error {
     case invalidDocument
 }
@@ -711,7 +707,15 @@ actor Persistence {
     }
 
     private func decodeSchemaVersion(from data: Data) throws -> Int {
-        try JSONDecoder().decode(RegistrySchemaHeader.self, from: data).schemaVersion
+        let json = try JSONSerialization.jsonObject(with: data)
+        guard let object = json as? [String: Any],
+              let number = object["schemaVersion"] as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID(),
+              !CFNumberIsFloatType(number),
+              let schemaVersion = Int(number.stringValue) else {
+            throw RegistryValidationError.invalidSchemaVersion
+        }
+        return schemaVersion
     }
 
     private func quarantineCorruptRegistry() -> URL {

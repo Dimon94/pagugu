@@ -67,6 +67,17 @@ final class PersistenceTests: XCTestCase {
                 json: #"{"schemaVersion":1.5,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{}}"#,
                 expectedKind: .corrupt
             ),
+            // 错误实现会失败：JSONDecoder 会把 1.0 解码成 Int 1，继而错误进入 ready。
+            Case(
+                name: "浮点字面量 schema 版本",
+                json: #"{"schemaVersion":1.0,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{}}"#,
+                expectedKind: .corrupt
+            ),
+            Case(
+                name: "等价浮点字面量 schema 版本",
+                json: #"{"schemaVersion":1.00,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{}}"#,
+                expectedKind: .corrupt
+            ),
             Case(
                 name: "未知字段",
                 json: #"{"schemaVersion":1,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{},"futureOptional":true}"#,
