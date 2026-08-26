@@ -58,6 +58,16 @@ final class PersistenceTests: XCTestCase {
                 expectedKind: .unknownFutureVersion
             ),
             Case(
+                name: "布尔 schema 版本",
+                json: #"{"schemaVersion":true,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{}}"#,
+                expectedKind: .corrupt
+            ),
+            Case(
+                name: "非整数 schema 版本",
+                json: #"{"schemaVersion":1.5,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{}}"#,
+                expectedKind: .corrupt
+            ),
+            Case(
                 name: "未知字段",
                 json: #"{"schemaVersion":1,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{},"futureOptional":true}"#,
                 expectedKind: nil

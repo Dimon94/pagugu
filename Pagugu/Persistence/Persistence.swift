@@ -404,6 +404,10 @@ private enum RegistryValidationError: Error {
     case invalidCheckoutObservation
 }
 
+private struct RegistrySchemaHeader: Decodable {
+    let schemaVersion: Int
+}
+
 private enum AuditValidationError: Error {
     case invalidDocument
 }
@@ -689,14 +693,7 @@ actor Persistence {
     }
 
     private func decodeSchemaVersion(from data: Data) throws -> Int {
-        let object = try JSONSerialization.jsonObject(with: data)
-        guard let dictionary = object as? [String: Any],
-              let number = dictionary["schemaVersion"] as? NSNumber,
-              CFGetTypeID(number) != CFBooleanGetTypeID(),
-              number.doubleValue == Double(number.intValue) else {
-            throw RegistryValidationError.invalidSchemaVersion
-        }
-        return number.intValue
+        try JSONDecoder().decode(RegistrySchemaHeader.self, from: data).schemaVersion
     }
 
     private func quarantineCorruptRegistry() -> URL {
