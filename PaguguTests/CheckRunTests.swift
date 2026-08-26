@@ -731,6 +731,64 @@ final class CheckRunTests: XCTestCase {
         XCTAssertEqual(audit.records.last?.updateFailureReason, "precondition-changed")
     }
 
+    func testUpdateRunScratchClassifiesDirtyDivergenceAsPreconditionChanged() async throws {
+        let repository = try makeUpdateRepository(named: "update-precondition-dirty-diverged")
+        let client = GitClient()
+        try await client.fetch(remote: "origin", upstreamRef: "origin/main", at: repository.checkout.path)
+        let entranceFacts = await client.inspectCheckout(
+            at: repository.checkout.path,
+            scope: .afterSuccessfulCheck
+        )
+        let sourceKey = try XCTUnwrap(SkillSourceKey.normalize(remoteURL: repository.remoteURL))
+        let identity = SkillIdentity(sourceKey: sourceKey, repositoryRelativePath: "skills/one")
+        let executor = RacingUpdateGitExecutor(
+            client: client,
+            checkout: repository.checkout,
+            intervention: .dirtyAndDivergeBeforeFastForward
+        )
+        let persistence = Persistence(
+            directoryURL: temporaryDirectory.appendingPathComponent("precondition-dirty-diverged-data")
+        )
+        let runner = UpdateRunner(
+            gitInspector: client,
+            gitExecutor: executor,
+            audit: AuditEvidence(persistence: persistence)
+        )
+        let preparation = try await runner.prepareUpdate(request: UpdateRunRequest(
+            skillIdentity: identity,
+            target: CheckRunTarget(sourceKey: sourceKey, facts: entranceFacts),
+            affectedSkills: [UpdateAffectedSkill(identity: identity, displayName: "One")]
+        ))
+        guard case .ready(let plan) = preparation else { return XCTFail("预期确认计划") }
+
+        do {
+            _ = try await runner.executeConfirmed(plan)
+            XCTFail("dirty 与 diverged 并存时必须按 dirty 主状态处理")
+        } catch let failure as UpdateRunFailure {
+            XCTAssertEqual(failure.reason, .preconditionChanged)
+            XCTAssertEqual(failure.blockingState, .dirty)
+            XCTAssertEqual(failure.displayName, "更新前置条件已变化")
+            XCTAssertEqual(failure.recoveryDirection, CheckoutGitState.dirty.recoveryDirection)
+            XCTAssertNotEqual(failure.reason, .fastForwardRejected)
+        } catch {
+            XCTFail("dirty + diverged 必须返回稳定 typed failure，实际为 \(error)")
+        }
+
+        let currentFacts = await client.inspectCheckout(
+            at: repository.checkout.path,
+            scope: .afterSuccessfulCheck
+        )
+        XCTAssertTrue(currentFacts.dirty.isDirty)
+        guard case .diverged = currentFacts.relativePosition else {
+            return XCTFail("测试夹具必须同时构造 diverged，实际为 \(currentFacts.relativePosition)")
+        }
+        XCTAssertEqual(CheckoutEligibility.evaluate(facts: currentFacts, sourceKey: sourceKey), .dirty)
+        let fastForwardCount = await executor.fastForwardCount
+        XCTAssertEqual(fastForwardCount, 1, "失败不得自动重试")
+        let audit = await persistence.loadAuditEvidence()
+        XCTAssertEqual(audit.records.last?.updateFailureReason, "precondition-changed")
+    }
+
     func testUpdateRunScratchClassifiesInstantDivergenceAsFastForwardRejectedWithoutRollback() async throws {
         let repository = try makeUpdateRepository(named: "update-ff-rejected")
         let client = GitClient()
@@ -1094,6 +1152,7 @@ final class CheckRunTests: XCTestCase {
     private actor RacingUpdateGitExecutor: GitExecuting {
         enum Intervention: Sendable {
             case dirtyBeforeFailedFastForward
+            case dirtyAndDivergeBeforeFastForward
             case divergeBeforeFastForward
             case dirtyAfterSuccessfulFastForward
         }
@@ -1118,6 +1177,12 @@ final class CheckRunTests: XCTestCase {
             switch intervention {
             case .dirtyBeforeFailedFastForward:
                 try Self.write("external local change", to: checkout.appendingPathComponent("tracked.txt"))
+                try await client.fastForward(to: targetSHA, at: checkoutPath)
+            case .dirtyAndDivergeBeforeFastForward:
+                try Self.write("external local advance", to: checkout.appendingPathComponent("tracked.txt"))
+                try Self.git(["add", "tracked.txt"], at: checkout)
+                try Self.git(["commit", "-m", "external local advance"], at: checkout)
+                try Self.write("external uncommitted change", to: checkout.appendingPathComponent("tracked.txt"))
                 try await client.fastForward(to: targetSHA, at: checkoutPath)
             case .divergeBeforeFastForward:
                 try Self.write("external local advance", to: checkout.appendingPathComponent("tracked.txt"))

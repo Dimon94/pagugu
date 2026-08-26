@@ -626,14 +626,15 @@ final class UpdateRunner: Sendable {
                 : .commandFailure
             return (reason, nil)
         }
-        if case .diverged = currentFacts.relativePosition {
-            return (.fastForwardRejected, nil)
-        }
         let state = CheckoutEligibility.evaluate(facts: currentFacts, sourceKey: plan.sourceKey)
-        if state == .dirty {
+        switch state {
+        case .dirty:
             return (.preconditionChanged, state)
+        case .diverged:
+            return (.fastForwardRejected, nil)
+        default:
+            return (.commandFailure, nil)
         }
-        return (.commandFailure, nil)
     }
 
     private func recordFailure(
