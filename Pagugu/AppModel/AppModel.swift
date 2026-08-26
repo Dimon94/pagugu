@@ -3,11 +3,12 @@ import Foundation
 // L3 COORD: Pagugu/AppModel/AppModel.swift
 // POS: AppModel 模块（ADR-0009 §7）。@MainActor composition root：
 //      owns Skill Read Model、受限恢复与来源映射错误投影、目录收起、Check/Update 瞬态、全部 UI intent
-//      与启动/刷新编排；每次发布按实时事实重推导观察 freshness。does not own 直接 Git/文件系统/持久 IO
+//      与启动/刷新编排；每次发布按实时事实重推导观察 freshness。审计历史投影只服务「最近活动」呈现；
+//      Registry reset 成功后呈现 quarantine 备份路径。does not own 直接 Git/文件系统/持久 IO
 //      （经 Git/Discovery/Registry/Audit/Runs seam）、
 //      业务规则重建。
 // TEST: repo://PaguguTests/AppModelTests.swift（Registry gate、Project Scan Root intent、
-//      目录投影与 intent 路由 smoke）。
+//      目录投影与 intent 路由 smoke、审计呈现投影）。
 
 enum AppRun: Equatable, Sendable {
     case check
@@ -67,6 +68,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var activeRun: AppRun?
     @Published private(set) var updateResult: UpdateResult?
     @Published private(set) var updateRefreshFailure: UpdateRefreshFailure?
+    /// 审计历史投影。只服务「最近活动」呈现；永不参与裁决、freshness 或执行许可。
+    @Published private(set) var auditHistory = AuditHistoryProjection(isUnavailable: false, items: [])
+    /// Registry 重置成功后的 quarantine 备份路径（一次性呈现）。
+    @Published private(set) var registryResetBackupPath: String?
 
     /// 收起的来源仓库行集合（默认全部展开）。瞬态 UI 状态，不持久化。
     @Published private(set) var collapsedSources: Set<SkillSourceKey> = []
@@ -97,7 +102,7 @@ final class AppModel: ObservableObject {
 
     // MARK: - 启动流水线（ADR-0009 §13）
 
-    /// 先载 Registry。受限恢复时阻断全部业务；正常态才执行 Discovery。
+    /// 先载 Registry 与 Audit。Registry 受限恢复时阻断全部业务；Audit 损坏 fail-open。
     func start() async {
         switch await registry.load() {
         case .ready:
@@ -112,6 +117,7 @@ final class AppModel: ObservableObject {
             pendingUpdatePlan = nil
             activeRun = nil
         }
+        auditHistory = await audit.history()
     }
 
     private func publishDiscovery(successfulUpdateFacts: CheckoutGitFacts? = nil) async {
@@ -301,6 +307,7 @@ final class AppModel: ObservableObject {
                 await publishDiscovery()
             case .finished(let summary):
                 checkRunSummary = summary
+                auditHistory = await audit.history()
             }
         }
     }
@@ -399,6 +406,7 @@ final class AppModel: ObservableObject {
         )
         do {
             let success = try await runner.executeConfirmed(plan)
+            auditHistory = await audit.history()
             pendingUpdatePlan = nil
             updateResult = .success(
                 checkoutPath: success.plan.checkoutCanonicalPath,
@@ -423,6 +431,7 @@ final class AppModel: ObservableObject {
         } catch let failure as UpdateRunFailure {
             pendingUpdatePlan = nil
             updateResult = .failed(failure)
+            auditHistory = await audit.history()
             activeRun = nil
         } catch {
             pendingUpdatePlan = nil
@@ -444,6 +453,7 @@ final class AppModel: ObservableObject {
             audit: audit
         )
         await runner.cancelPrepared(plan)
+        auditHistory = await audit.history()
         pendingUpdatePlan = nil
         updateResult = .cancelled(checkoutPath: plan.checkoutCanonicalPath)
         updateRefreshFailure = nil
@@ -454,6 +464,10 @@ final class AppModel: ObservableObject {
     func dismissUpdateResult() {
         updateResult = nil
         updateRefreshFailure = nil
+    }
+
+    func dismissRegistryResetBackupPath() {
+        registryResetBackupPath = nil
     }
 
     /// App 退出时只尽力终止当前 Git 子进程；run 不持久、不补写 terminal。
@@ -519,6 +533,7 @@ final class AppModel: ObservableObject {
             )
             sourceMappingError = nil
             if changed { await publishDiscovery() }
+            if changed { auditHistory = await audit.history() }
             return changed
         } catch let error as SourceMappingError {
             handleSourceMappingError(error)
@@ -536,6 +551,7 @@ final class AppModel: ObservableObject {
             )
             sourceMappingError = nil
             if changed { await publishDiscovery() }
+            if changed { auditHistory = await audit.history() }
             return changed
         } catch let error as SourceMappingError {
             handleSourceMappingError(error)
@@ -550,14 +566,34 @@ final class AppModel: ObservableObject {
         sourceMappingError = nil
     }
 
-    /// 显式确认后清空三类 Registry 主张；成功后恢复完整扫描。
+    /// 显式确认后清空审计集合：只删历史，不动 Registry 与用户仓库，不留墓碑。写失败 fail-open。
+    func clearAuditHistory(confirmed: Bool) async {
+        guard confirmed else { return }
+        await audit.clearHistory()
+        auditHistory = await audit.history()
+    }
+
+    /// 「最近活动」失败详情只提供导航：按身份快照解析当前已发现 Skill。
+    func skillIdentity(
+        matchingSnapshotSourceKey sourceKey: String,
+        repositoryRelativePath: String
+    ) -> SkillIdentity? {
+        readModel.sources
+            .first { $0.id.registryValue == sourceKey }
+            .flatMap { source in
+                source.skills.first { $0.id.repositoryRelativePath == repositoryRelativePath }?.id
+            }
+    }
+
+    /// 显式确认后清空三类 Registry 主张；成功后呈现 quarantine 备份路径并恢复完整扫描。
     func resetRegistry(confirmed: Bool) async {
         do {
-            _ = try await registry.reset(confirmed: confirmed)
+            let backupURL = try await registry.reset(confirmed: confirmed)
             registryRecovery = nil
             registryReady = true
             projectScanRootError = nil
             sourceMappingError = nil
+            registryResetBackupPath = backupURL?.path
             await publishDiscovery()
         } catch let error as ProjectScanRootError {
             if case .persistence(.writeFailed(let recovery)) = error {

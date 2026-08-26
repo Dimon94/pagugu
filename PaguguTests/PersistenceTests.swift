@@ -276,6 +276,73 @@ final class PersistenceTests: XCTestCase {
         XCTAssertEqual(audit.records.first?.installationCanonicalPath, "/installation")
     }
 
+    // 错误实现会失败：损坏审计必须 fail-open 返回空历史、quarantine 原文件，
+    // 并向调用方暴露「历史不可用」信号；不能静默重建为空冒充正常空历史。
+    func testCorruptAuditLoadsEmptyFailOpenAndSignalsUnavailable() async throws {
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let auditURL = directoryURL.appendingPathComponent("audit-history.json")
+        try Data("not json".utf8).write(to: auditURL)
+        let persistence = Persistence(directoryURL: directoryURL)
+
+        let document = await persistence.loadAuditDocument()
+        let audit = await persistence.loadAuditEvidence()
+
+        XCTAssertNil(document, "损坏审计必须向呈现层暴露不可用信号")
+        XCTAssertEqual(audit, .empty, "损坏审计 fail-open：丢弃重建为空")
+        XCTAssertFalse(fileManager.fileExists(atPath: auditURL.path))
+        let quarantined = try fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: nil
+        )
+        XCTAssertEqual(quarantined.count, 1)
+        XCTAssertTrue(quarantined.first?.lastPathComponent.hasPrefix("audit-history.corrupt-") == true)
+
+        // 损坏不阻断后续写入：追加记录后历史恢复正常可读。
+        try await persistence.appendAuditEvidence(AuditRecord(
+            id: "after-corruption",
+            recordedAt: Date(timeIntervalSince1970: 1),
+            outcome: .created,
+            installationCanonicalPath: "/installations/example",
+            target: SourceMappingRecord(
+                skillSourceKey: "github.com/Owner/repo",
+                repositoryRelativePath: "skills/example"
+            )
+        ))
+        let recovered = await persistence.loadAuditDocument()
+        XCTAssertEqual(recovered?.records.map(\.id), ["after-corruption"])
+    }
+
+    func testClearAuditEvidenceOnlyRemovesAuditCollectionWithoutTombstone() async throws {
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let registryURL = directoryURL.appendingPathComponent("registry.json")
+        let registryJSON = #"{"schemaVersion":1,"projectScanRoots":[{"canonicalPath":"/scan","asFoundPath":"/scan"}],"sourceMappings":{},"checkoutObservations":{}}"#
+        try Data(registryJSON.utf8).write(to: registryURL)
+        let persistence = Persistence(directoryURL: directoryURL)
+        _ = await persistence.loadRegistry()
+        try await persistence.appendAuditEvidence(AuditRecord(
+            id: "legacy",
+            recordedAt: Date(timeIntervalSince1970: 1),
+            outcome: .created,
+            installationCanonicalPath: "/installations/example",
+            target: SourceMappingRecord(
+                skillSourceKey: "github.com/Owner/repo",
+                repositoryRelativePath: "skills/example"
+            )
+        ))
+
+        try await persistence.clearAuditEvidence()
+
+        let reloaded = await Persistence(directoryURL: directoryURL)
+        let cleared = await reloaded.loadAuditEvidence()
+        XCTAssertTrue(cleared.records.isEmpty, "清空不留墓碑记录")
+        let registryReload = await reloaded.loadRegistry()
+        XCTAssertEqual(
+            registryReload,
+            .ready(document(scanRoot: "/scan")),
+            "清空审计不得触碰 Registry"
+        )
+    }
+
     func testAuditEvidenceKeepsLatestTwoHundredRecords() async throws {
         let persistence = Persistence(directoryURL: directoryURL)
         let target = SourceMappingRecord(

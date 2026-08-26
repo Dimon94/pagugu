@@ -8,8 +8,10 @@ import UniformTypeIdentifiers
 //      + 无仓库可归行（来源不明）；消费 Skill Read Model 给出的逐态短语与五档顺序；无分组标题、无筛选 UI。
 //      右侧：Skill 详情四块（状态与检出、安装位置、来源标识、SKILL.md 原文只读可选中）；
 //      空选择回欢迎引导。「相关记录」「更新动作」块归后续票。
-//      工具栏提供全量手动检查与 Project Scan Root 管理；Registry 故障由全窗口门面接管。
-//      View 只消费 Skill Read Model、只发 AppModel intent，不做 IO。
+//      工具栏提供全量手动检查、扫描范围管理与「最近活动」三语义面（摘要、详情、清空确认；
+//      详情标注「当时记录」，失败无 stderr/命令复制/重试，只导航相关 Skill；损坏呈现「历史不可用」）；
+//      Registry 故障由全窗口门面接管，重置后呈现 quarantine 备份路径横幅。
+//      View 只消费 Skill Read Model 与审计投影、只发 AppModel intent，不做 IO。
 // TEST: repo://PaguguTests/AppModelTests.swift（AppModel 正常/阻断投影与 intent 路由 smoke）。
 
 struct ContentView: View {
@@ -17,6 +19,7 @@ struct ContentView: View {
     @State private var selection: SkillDirectoryNode?
     @State private var showsProjectScanRoots = false
     @State private var showsProjectRootImporter = false
+    @State private var showsRecentActivity = false
     @State private var mappingRequest: MappingRequest?
 
     var body: some View {
@@ -59,6 +62,21 @@ struct ContentView: View {
                 add: { showsProjectRootImporter = true },
                 remove: { canonicalPath in
                     await model.removeProjectScanRoot(canonicalPath: canonicalPath)
+                }
+            )
+        }
+        .sheet(isPresented: $showsRecentActivity) {
+            RecentActivitySheet(
+                history: model.auditHistory,
+                clear: { await model.clearAuditHistory(confirmed: true) },
+                openSkill: { sourceKey, repositoryRelativePath in
+                    guard let identity = model.skillIdentity(
+                        matchingSnapshotSourceKey: sourceKey,
+                        repositoryRelativePath: repositoryRelativePath
+                    ) else { return false }
+                    showsRecentActivity = false
+                    selection = .skill(identity)
+                    return true
                 }
             )
         }
@@ -116,6 +134,27 @@ struct ContentView: View {
             )
         } detail: {
             VStack(spacing: 0) {
+                if let backupPath = model.registryResetBackupPath {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle")
+                            .foregroundStyle(.green)
+                        Text("Registry 已重置为空。原文件备份在：")
+                        Text(backupPath)
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Button("关闭", systemImage: "xmark") {
+                            model.dismissRegistryResetBackupPath()
+                        }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.plain)
+                    }
+                    .font(.callout)
+                    .padding(10)
+                    .background(Color.green.opacity(0.10))
+                }
                 if let progress = model.checkRunProgress {
                     CheckRunBanner(progress: progress, summary: nil, onDismiss: nil)
                 } else if let summary = model.checkRunSummary {
@@ -148,6 +187,11 @@ struct ContentView: View {
             ToolbarItem(placement: .primaryAction) {
                 Button("扫描范围", systemImage: "folder.badge.gearshape") {
                     showsProjectScanRoots = true
+                }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button("最近活动", systemImage: "clock.arrow.circlepath") {
+                    showsRecentActivity = true
                 }
             }
         }
@@ -1230,6 +1274,202 @@ private struct WelcomePanel: View {
             }
             .buttonStyle(.borderedProminent)
         }
+    }
+}
+
+// MARK: - 最近活动（ADR-0007 §7 三语义面：摘要列表、单条详情、清空动作）
+// 历史快照标注「当时记录」，与当前实时状态明确区分；历史永不覆盖或参与当前状态呈现。
+// 失败详情不提供原始 stderr、不生成/复制终端命令、不提供一键重试，只导航到相关 Skill。
+
+private struct RecentActivitySheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let history: AuditHistoryProjection
+    let clear: () async -> Void
+    let openSkill: (String, String) -> Bool
+    @State private var selectedItemID: AuditActivityItem.ID?
+    @State private var showsClearConfirmation = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("最近活动")
+                    .font(.title2.bold())
+                Spacer()
+                Button("关闭") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+            }
+
+            if history.isUnavailable {
+                ContentUnavailableView(
+                    AuditHistoryProjection.unavailableMessage,
+                    systemImage: "exclamationmark.triangle",
+                    description: Text("审计历史已损坏并丢弃重建。这不会影响任何功能；此后的动作会重新记录。")
+                )
+            } else if history.items.isEmpty {
+                ContentUnavailableView(
+                    "暂无记录",
+                    systemImage: "clock",
+                    description: Text("检查、更新与来源映射维护会记录在这里。")
+                )
+            } else {
+                List(history.items, selection: $selectedItemID) { item in
+                    AuditActivityRow(item: item)
+                        .tag(item.id)
+                }
+
+                if let item = history.items.first(where: { $0.id == selectedItemID }) {
+                    AuditRecordDetailView(item: item, openSkill: openSkill)
+                }
+            }
+
+            HStack {
+                Text("清空只删除历史记录，不影响 Skill、Registry 与 Git 仓库。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("清空历史", systemImage: "trash", role: .destructive) {
+                    showsClearConfirmation = true
+                }
+                .disabled(history.items.isEmpty && !history.isUnavailable)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 660, minHeight: 480)
+        .alert("确认清空审计历史？", isPresented: $showsClearConfirmation) {
+            Button("取消", role: .cancel) {}
+            Button("清空历史", role: .destructive) {
+                Task { await clear() }
+            }
+        } message: {
+            Text("将删除全部审计历史记录，且无法恢复。不会修改 Registry、Skill Source、Skill Installation 或 Git 工作树。")
+        }
+    }
+}
+
+private struct AuditActivityRow: View {
+    let item: AuditActivityItem
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(item.title)
+                .font(.callout)
+            if let identity = item.skillIdentity {
+                Text(identity.repositoryRelativePath.isEmpty
+                     ? identity.sourceKey
+                     : "\(identity.sourceKey)/\(identity.repositoryRelativePath)")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+            Text(item.outcomeDisplayName)
+                .font(.caption)
+                .foregroundStyle(outcomeColor)
+            Text(item.recordedAt.formatted(date: .abbreviated, time: .standard))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var outcomeColor: Color {
+        switch item.outcome {
+        case .interruptedUnknown: return .orange
+        case .record(let outcome):
+            switch outcome {
+            case .success, .complete, .created: return .green
+            case .partial, .cancelled: return .orange
+            case .failed, .deleted: return .red
+            }
+        }
+    }
+}
+
+private struct AuditRecordDetailView: View {
+    let item: AuditActivityItem
+    let openSkill: (String, String) -> Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("当时记录：以下为该动作发生时的历史快照，不代表当前实时状态。",
+                  systemImage: "clock.arrow.circlepath")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            LabeledContent("动作") { detailText(item.title) }
+            LabeledContent("时间") {
+                detailText(item.recordedAt.formatted(date: .abbreviated, time: .standard))
+            }
+            LabeledContent("结果") { detailText(item.outcomeDisplayName) }
+
+            if let scope = item.record.checkRunScope {
+                LabeledContent("检查范围") {
+                    detailText("应检查 \(scope.checkableCount) · 成功 \(scope.succeededCount) · 失败 \(scope.failedCount) · 不适用 \(scope.skippedCount)")
+                }
+            }
+
+            if let path = item.record.installationCanonicalPath {
+                LabeledContent("Installation") { detailText(path) }
+            }
+            if let target = item.record.target {
+                LabeledContent("映射目标") {
+                    detailText("\(target.skillSourceKey) · \(target.repositoryRelativePath)")
+                }
+            }
+
+            if let plan = item.record.updateRunPlan {
+                LabeledContent("Skill") {
+                    detailText("\(plan.skillIdentity.skillSourceKey) · \(plan.skillIdentity.repositoryRelativePath)")
+                }
+                LabeledContent("目标检出") { detailText(plan.checkoutCanonicalPath) }
+                LabeledContent("分支 / upstream") {
+                    detailText("\(plan.branchName) / \(plan.upstreamRefName)")
+                }
+                LabeledContent("当前 HEAD") { detailText(plan.currentHeadSHA) }
+                LabeledContent("目标 SHA") { detailText(plan.targetSHA) }
+                LabeledContent("behind") { detailText(String(plan.behindCount)) }
+                if plan.affectedSkills.count > 1 {
+                    LabeledContent("影响范围") {
+                        detailText("同一仓库的 \(plan.affectedSkills.count) 个 Skill 一起前进：" +
+                            plan.affectedSkills.map(\.repositoryRelativePath).joined(separator: "、"))
+                    }
+                }
+            } else if let target = item.record.updateRunTarget {
+                LabeledContent("Skill") {
+                    detailText("\(target.skillIdentity.skillSourceKey) · \(target.skillIdentity.repositoryRelativePath)")
+                }
+                LabeledContent("目标检出") { detailText(target.checkoutCanonicalPath) }
+                LabeledContent("分支 / upstream") {
+                    detailText("\(target.branchName) / \(target.upstreamRefName)")
+                }
+            }
+
+            if let reasonCode = item.failureReasonCode,
+               let reason = UpdateRunFailureReason(rawValue: reasonCode) {
+                LabeledContent("原因") { detailText(reason.displayName) }
+                Text(reason.recoveryDirection)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if item.action == .updateRun, let identity = item.skillIdentity {
+                Button("查看相关 Skill") {
+                    _ = openSkill(identity.sourceKey, identity.repositoryRelativePath)
+                }
+                .font(.callout)
+            }
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func detailText(_ value: String) -> some View {
+        Text(value)
+            .font(.caption.monospaced())
+            .textSelection(.enabled)
+            .multilineTextAlignment(.trailing)
     }
 }
 

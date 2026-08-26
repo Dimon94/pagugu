@@ -624,8 +624,8 @@ actor Persistence {
         return evidenceURL
     }
 
-    /// 审计损坏时 fail-open：保留损坏文件并返回空历史，不阻断 Registry 动作。
-    func loadAuditEvidence() -> AuditDocument {
+    /// 审计损坏时 fail-open：返回 nil 由调用方呈现「历史不可用」，不阻断任何 Registry 动作。
+    func loadAuditDocument() -> AuditDocument? {
         guard FileManager.default.fileExists(atPath: auditURL.path),
               let bytes = try? Data(contentsOf: auditURL) else {
             return .empty
@@ -639,7 +639,27 @@ actor Persistence {
             return document
         } catch {
             _ = try? quarantineAudit()
-            return .empty
+            return nil
+        }
+    }
+
+    /// 审计损坏时 fail-open：保留损坏文件并返回空历史，不阻断 Registry 动作。
+    func loadAuditEvidence() -> AuditDocument {
+        loadAuditDocument() ?? .empty
+    }
+
+    /// L4 IN: 必须由显式确认触发；只针对 audit-history.json。
+    /// OUT: 清空审计集合（含损坏 quarantine 前的残留），不动 Registry 与用户仓库，不留墓碑。
+    func clearAuditEvidence() throws {
+        do {
+            let encoder = JSONEncoder()
+            try ensureDirectory()
+            try writeDurably(
+                encoder.encode(AuditDocument.empty),
+                to: auditURL
+            )
+        } catch {
+            throw AuditValidationError.invalidDocument
         }
     }
 

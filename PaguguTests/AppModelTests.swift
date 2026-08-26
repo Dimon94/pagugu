@@ -1769,4 +1769,183 @@ final class AppModelTests: XCTestCase {
         XCTAssertNil(model.readModel.unattributedInstallations.first?.installations.first?.sourceMapping)
         XCTAssertTrue(fm.fileExists(atPath: copy.path))
     }
+
+    // MARK: - 审计呈现三语义面与破坏性动作收口（#26）
+
+    private func makeAuditUpdatePlan() -> AuditRecord.UpdateRunPlan {
+        AuditRecord.UpdateRunPlan(
+            skillIdentity: .init(
+                skillSourceKey: "github.com/Owner/repo",
+                repositoryRelativePath: "skills/example"
+            ),
+            checkoutCanonicalPath: "/checkouts/repo",
+            branchName: "main",
+            upstreamRefName: "origin/main",
+            currentHeadSHA: String(repeating: "1", count: 40),
+            targetSHA: String(repeating: "2", count: 40),
+            behindCount: 1,
+            affectedSkills: [
+                .init(
+                    skillSourceKey: "github.com/Owner/repo",
+                    repositoryRelativePath: "skills/example"
+                ),
+            ]
+        )
+    }
+
+    // 错误实现会失败：started 必须先于 terminal 处理；terminal 必须吞掉同 run 的 started；
+    // 孤儿 started 必须呈现「结果未知（已中断）」而不是成功、运行中或消失。
+    func testAuditProjectionCollapsesTerminalAndFlagsOrphanStartedAsInterrupted() throws {
+        let plan = makeAuditUpdatePlan()
+        let started = AuditRecord(
+            id: "started",
+            recordedAt: Date(timeIntervalSince1970: 100),
+            updateRunID: "run-a",
+            phase: .started,
+            plan: plan
+        )
+        let terminal = AuditRecord(
+            id: "terminal",
+            recordedAt: Date(timeIntervalSince1970: 200),
+            updateRunID: "run-a",
+            phase: .terminal,
+            plan: plan,
+            outcome: .success
+        )
+        let orphan = AuditRecord(
+            id: "orphan",
+            recordedAt: Date(timeIntervalSince1970: 300),
+            updateRunID: "run-b",
+            phase: .started,
+            plan: plan
+        )
+        let check = AuditRecord(
+            id: "check",
+            recordedAt: Date(timeIntervalSince1970: 50),
+            outcome: .complete,
+            checkRunScope: .init(checkableCount: 2, succeededCount: 2, failedCount: 0, skippedCount: 1)
+        )
+        // 乱序与 started 在 terminal 之后写入都必须折叠正确；同 run 只保留 terminal 项，
+        // 位置取 terminal 的 append 位置。
+        for records in [[started, terminal, orphan, check], [terminal, started, orphan, check]] {
+            let projection = AuditPresentation.project(
+                AuditDocument(schemaVersion: 1, records: records)
+            )
+
+            XCTAssertFalse(projection.isUnavailable)
+            XCTAssertEqual(projection.items.map(\.record.id), ["check", "orphan", "terminal"],
+                           "最新（append 顺序）在前；terminal 吞掉同 run 的 started")
+            let collapsed = projection.items[2]
+            XCTAssertEqual(collapsed.outcome, .record(.success))
+            XCTAssertEqual(collapsed.outcomeDisplayName, "成功")
+            let orphanItem = projection.items[1]
+            XCTAssertEqual(orphanItem.outcome, .interruptedUnknown)
+            XCTAssertEqual(orphanItem.outcomeDisplayName, "结果未知（已中断）")
+            XCTAssertEqual(orphanItem.failureReasonCode,
+                           UpdateRunFailureReason.interruptedUnknown.rawValue)
+        }
+    }
+
+    func testAuditProjectionFailOpenAndEmptyStates() {
+        let corrupt = AuditPresentation.project(nil)
+        XCTAssertTrue(corrupt.isUnavailable)
+        XCTAssertTrue(corrupt.items.isEmpty)
+        XCTAssertEqual(AuditHistoryProjection.unavailableMessage, "历史不可用")
+
+        let empty = AuditPresentation.project(.empty)
+        XCTAssertFalse(empty.isUnavailable)
+        XCTAssertTrue(empty.items.isEmpty)
+    }
+
+    @MainActor
+    func testCorruptAuditPublishesHistoryUnavailableWhileRegistryStaysFailClosed() async throws {
+        let dataDirectory = tmp.appendingPathComponent("corrupt-audit-data")
+        try fm.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
+        try Data("not json".utf8).write(to: dataDirectory.appendingPathComponent("audit-history.json"))
+        try Data("{ also not json".utf8).write(to: dataDirectory.appendingPathComponent("registry.json"))
+        let model = AppModel(
+            personalRoots: [tmp.appendingPathComponent("missing").path],
+            persistence: Persistence(directoryURL: dataDirectory)
+        )
+
+        await model.start()
+
+        // Audit fail-open 与 Registry fail closed 的用户可观察对照：
+        // 历史不可用，但 Registry 损坏仍阻断全部业务。
+        XCTAssertTrue(model.auditHistory.isUnavailable)
+        XCTAssertEqual(model.registryRecovery?.kind, .corrupt)
+        XCTAssertFalse(model.registryReady)
+        XCTAssertTrue(model.readModel.isEmpty)
+        XCTAssertFalse(fm.fileExists(
+            atPath: dataDirectory.appendingPathComponent("audit-history.json").path
+        ), "损坏审计必须被 quarantine 丢弃重建")
+    }
+
+    @MainActor
+    func testClearAuditHistoryRequiresConfirmationAndLeavesNoTombstone() async throws {
+        let dataDirectory = tmp.appendingPathComponent("clear-audit-data")
+        let persistence = Persistence(directoryURL: dataDirectory)
+        let target = SourceMappingRecord(
+            skillSourceKey: "github.com/Owner/repo",
+            repositoryRelativePath: "skills/example"
+        )
+        try await persistence.appendAuditEvidence(AuditRecord(
+            id: "legacy",
+            recordedAt: Date(timeIntervalSince1970: 1),
+            outcome: .created,
+            installationCanonicalPath: "/installations/example",
+            target: target
+        ))
+        let model = AppModel(
+            personalRoots: [tmp.appendingPathComponent("missing").path],
+            persistence: persistence
+        )
+        await model.start()
+        XCTAssertEqual(model.auditHistory.items.count, 1)
+
+        await model.clearAuditHistory(confirmed: false)
+        XCTAssertEqual(model.auditHistory.items.count, 1, "未确认不得清空")
+
+        await model.clearAuditHistory(confirmed: true)
+
+        XCTAssertFalse(model.auditHistory.isUnavailable)
+        XCTAssertTrue(model.auditHistory.items.isEmpty)
+        let reloaded = await Persistence(directoryURL: dataDirectory).loadAuditEvidence()
+        XCTAssertTrue(reloaded.records.isEmpty, "清空只删审计集合，不留墓碑")
+    }
+
+    @MainActor
+    func testMappingAndCheckRunPublishToRecentActivity() async throws {
+        let personalRoot = tmp.appendingPathComponent("activity/skills")
+        let copy = personalRoot.appendingPathComponent("copy")
+        try writeSkill(at: copy, name: "copy")
+        let repository = tmp.appendingPathComponent("activity-repository")
+        try makeWorkTree(at: repository)
+        try writeSkill(at: repository.appendingPathComponent("source"), name: "source")
+        let model = AppModel(
+            personalRoots: [personalRoot.path],
+            persistence: Persistence(directoryURL: tmp.appendingPathComponent("activity-data"))
+        )
+        await model.start()
+        XCTAssertTrue(model.auditHistory.items.isEmpty)
+        await model.addProjectScanRoot(repository)
+
+        let target = try XCTUnwrap(model.readModel.mappingTargets.first)
+        let created = await model.createSourceMapping(
+            installationCanonicalPath: copy.path,
+            targetIdentity: target.id
+        )
+        XCTAssertTrue(created)
+
+        // 写入点在 Registry 模块（落盘时刻）；AppModel 在打开「最近活动」时重读历史。
+        await model.checkNow()
+
+        let titles = model.auditHistory.items.map(\.title)
+        XCTAssertEqual(titles, ["全量检查", "创建来源映射"], "最新在前（append 顺序反转）")
+        let item = try XCTUnwrap(model.auditHistory.items.last)
+        XCTAssertEqual(item.outcome, .record(.created))
+        XCTAssertEqual(item.outcomeDisplayName, "已创建")
+        XCTAssertEqual(item.record.target?.skillSourceKey, target.id.sourceKey.registryValue)
+        XCTAssertEqual(item.record.installationCanonicalPath, copy.path)
+    }
 }
