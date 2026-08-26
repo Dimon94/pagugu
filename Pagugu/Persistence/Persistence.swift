@@ -628,11 +628,19 @@ actor Persistence {
         return evidenceURL
     }
 
-    /// 审计损坏时 fail-open：返回 nil 由调用方呈现「历史不可用」，不阻断任何 Registry 动作。
+    /// L4 OUT: 缺文件返回正常空历史；已有文件读取、解码或校验失败时返回 nil。
+    /// L6 CHAIN: 已有文件失败先 quarantine，再由调用方呈现「历史不可用」；不阻断 Registry 动作。
     func loadAuditDocument() -> AuditDocument? {
-        guard FileManager.default.fileExists(atPath: auditURL.path),
-              let bytes = try? Data(contentsOf: auditURL) else {
+        guard FileManager.default.fileExists(atPath: auditURL.path) else {
             return .empty
+        }
+
+        let bytes: Data
+        do {
+            bytes = try Data(contentsOf: auditURL)
+        } catch {
+            _ = try? quarantineAudit()
+            return nil
         }
 
         do {

@@ -286,6 +286,45 @@ final class PersistenceTests: XCTestCase {
         XCTAssertEqual(audit.records.first?.installationCanonicalPath, "/installation")
     }
 
+    func testMissingAuditLoadsAsNormalEmptyHistory() async {
+        let persistence = Persistence(directoryURL: directoryURL)
+
+        let document = await persistence.loadAuditDocument()
+        let projection = AuditPresentation.project(document)
+
+        XCTAssertEqual(document, .empty)
+        XCTAssertFalse(projection.isUnavailable)
+        XCTAssertTrue(projection.items.isEmpty)
+        XCTAssertFalse(fileManager.fileExists(
+            atPath: directoryURL.appendingPathComponent("audit-history.json").path
+        ))
+    }
+
+    // 错误实现会失败：已有但不可读的审计文件不能冒充正常空历史。
+    func testUnreadableAuditIsQuarantinedAndSignalsHistoryUnavailable() async throws {
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let auditURL = directoryURL.appendingPathComponent("audit-history.json")
+        try Data(#"{"schemaVersion":1,"records":[]}"#.utf8).write(to: auditURL)
+        try fileManager.setAttributes([.posixPermissions: 0o000], ofItemAtPath: auditURL.path)
+        XCTAssertThrowsError(try Data(contentsOf: auditURL), "测试夹具必须真实触发字节读取失败")
+        let persistence = Persistence(directoryURL: directoryURL)
+
+        let document = await persistence.loadAuditDocument()
+        let projection = AuditPresentation.project(document)
+
+        XCTAssertNil(document, "读取失败必须向呈现层暴露不可用信号")
+        XCTAssertTrue(projection.isUnavailable)
+        XCTAssertTrue(projection.items.isEmpty)
+        XCTAssertEqual(AuditHistoryProjection.unavailableMessage, "历史不可用")
+        XCTAssertFalse(fileManager.fileExists(atPath: auditURL.path), "不可读审计必须被 quarantine")
+        let quarantined = try fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: nil
+        )
+        XCTAssertEqual(quarantined.count, 1)
+        XCTAssertTrue(quarantined.first?.lastPathComponent.hasPrefix("audit-history.corrupt-") == true)
+    }
+
     // 错误实现会失败：损坏审计必须 fail-open 返回空历史、quarantine 原文件，
     // 并向调用方暴露「历史不可用」信号；不能静默重建为空冒充正常空历史。
     func testCorruptAuditLoadsEmptyFailOpenAndSignalsUnavailable() async throws {
