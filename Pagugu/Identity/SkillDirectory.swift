@@ -25,7 +25,7 @@ enum SkillDirectory {
         var byCanonical: [String: (name: String, repositoryRoot: String?, fingerprint: String?, installations: [SkillInstallation])] = [:]
 
         for skill in result.skills {
-            let hosts = HostAttribution.hosts(for: skill.asFoundPath)
+            let hosts = HostAttribution.hosts(for: skill.asFoundPath, origin: skill.origin)
             let producesInstallation = skill.origin == .personalSkillRoot || !hosts.isEmpty
             if var existing = byCanonical[skill.canonicalPath] {
                 if producesInstallation {

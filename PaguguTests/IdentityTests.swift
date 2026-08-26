@@ -108,23 +108,43 @@ final class IdentityTests: XCTestCase {
     // MARK: - Host Attribution（#3 resolution §6）
 
     func testHostAttributionClaudeCode() {
-        let hosts = HostAttribution.hosts(for: "~/.claude/skills/my-skill")
+        let hosts = HostAttribution.hosts(
+            for: "~/.claude/skills/my-skill",
+            origin: .personalSkillRoot
+        )
         XCTAssertEqual(hosts, [.claude])
     }
 
     func testHostAttributionCodex() {
-        let hosts = HostAttribution.hosts(for: "~/.codex/skills/my-skill")
+        let hosts = HostAttribution.hosts(
+            for: "~/.codex/skills/my-skill",
+            origin: .personalSkillRoot
+        )
         XCTAssertEqual(hosts, [.codex])
     }
 
     func testHostAttributionAgentsGoesToCodex() {
         // .agents/skills → Codex（#3 resolution §6）
-        let hosts = HostAttribution.hosts(for: "~/.agents/skills/my-skill")
+        let hosts = HostAttribution.hosts(
+            for: "~/.agents/skills/my-skill",
+            origin: .personalSkillRoot
+        )
+        XCTAssertEqual(hosts, [.codex])
+    }
+
+    func testHostAttributionProjectAgentsGoesToCodex() {
+        let hosts = HostAttribution.hosts(
+            for: "~/Code/repo/.agents/skills/my-skill",
+            origin: .projectScanRoot
+        )
         XCTAssertEqual(hosts, [.codex])
     }
 
     func testHostAttributionUnknownPathReturnsEmpty() {
-        let hosts = HostAttribution.hosts(for: "~/random/path/skills")
+        let hosts = HostAttribution.hosts(
+            for: "~/random/path/skills",
+            origin: .projectScanRoot
+        )
         XCTAssertTrue(hosts.isEmpty)
     }
 
@@ -342,6 +362,24 @@ final class IdentityTests: XCTestCase {
         let entry = try! XCTUnwrap(contents.sources.first?.skills.first)
         XCTAssertTrue(entry.installations.isEmpty, "纯来源 Skill 保持零 Installation")
         XCTAssertTrue(entry.hosts.isEmpty, "无安装则宿主槽位全灰")
+    }
+
+    func testContentsDoesNotInferCodexHostForProjectCodexDirectory() {
+        let root = "/Users/dimon/suite-repo"
+        let skills = [
+            DiscoveredSkill(
+                asFoundPath: root + "/.codex/skills/skill-a",
+                canonicalPath: root + "/.codex/skills/skill-a",
+                name: "skill-a",
+                origin: .projectScanRoot,
+                repositoryRootPath: root
+            ),
+        ]
+        let contents = SkillDirectory.contents(from: ScanResult(outcome: .complete, skills: skills, issues: []))
+
+        let entry = try! XCTUnwrap(contents.sources.first?.skills.first)
+        XCTAssertTrue(entry.installations.isEmpty, "项目 .codex/skills 的宿主语义仍为 Unknown")
+        XCTAssertTrue(entry.hosts.isEmpty, "项目 .codex/skills 不点亮 Codex")
     }
 
     func testContentsProducesInstallationForProjectRootSkillWithHostAttribution() {

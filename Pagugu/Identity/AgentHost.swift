@@ -21,8 +21,9 @@ enum AgentHost: String, CaseIterable, Hashable, Sendable, Comparable {
     }
 }
 
-/// Agent Host 归因表：根据 Skill Installation 的 as-found 路径判断宿主。
-/// 规则来自 #3 resolution §6：`.claude/skills` → Claude，`.codex/skills` → Codex，`.agents/skills` → Codex。
+/// Agent Host 归因表：根据 Skill Installation 的 as-found 路径与发现入口判断宿主。
+/// 规则来自 #3 resolution §6：个人或项目 `.claude/skills` → Claude，个人 `.codex/skills` → Codex，
+/// 个人或项目 `.agents/skills` → Codex；项目 `.codex/skills` 的宿主语义仍为 Unknown。
 /// 归因表可扩展且不进入 Skill Identity。
 enum HostAttribution {
     /// 目录名 → Agent Host。key 是 host 目录的精确名称（含前导点）。
@@ -32,12 +33,15 @@ enum HostAttribution {
         ".agents": .codex,
     ]
 
-    /// 返回路径所属的 Agent Host 集合；不在任何已知目录下返回空集。
-    static func hosts(for asFoundPath: String) -> Set<AgentHost> {
+    /// 返回发现入口下路径所属的 Agent Host 集合；不在任何已知规则内返回空集。
+    static func hosts(for asFoundPath: String, origin: DiscoveryOrigin) -> Set<AgentHost> {
         let expanded = (asFoundPath as NSString).expandingTildeInPath
         var hosts = Set<AgentHost>()
 
         for (directory, host) in directoryToHost {
+            if origin == .projectScanRoot, directory == ".codex" {
+                continue
+            }
             // 匹配 `/<dir>/skills/` 或恰好以 `/<dir>/skills` 结尾
             let pattern = "/\(directory)/skills"
             if expanded.contains(pattern + "/") || expanded.hasSuffix(pattern) {
