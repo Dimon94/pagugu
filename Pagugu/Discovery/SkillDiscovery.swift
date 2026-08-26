@@ -388,8 +388,8 @@ enum Discovery {
 
     // MARK: - SKILL.md frontmatter 解析
 
-    /// 解析顶层精确 `SKILL.md`：校验 YAML frontmatter 的 `name` 和 `description` 字段。
-    /// 无 frontmatter 或字段缺失记为 Scan Issue（不可解析）。展示名取 frontmatter `name`。
+    /// 解析顶层精确 `SKILL.md`：要求 frontmatter 起止分隔符完整，且 `name`、`description` 均非空白。
+    /// 不合格候选由扫描入口记为 Scan Issue，不进入 Skill 列表。展示名取 frontmatter `name`。
     private static func parseSkillMD(
         at path: String,
         asFoundPath: String,
@@ -407,14 +407,14 @@ enum Discovery {
 
         var name: String?
         var description: String?
-        var inFrontmatter = false
+        var hasClosingDelimiter = false
 
         for line in lines.dropFirst() {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed == "---" {
+                hasClosingDelimiter = true
                 break
             }
-            inFrontmatter = true
 
             if trimmed.hasPrefix("name:") {
                 name = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespaces)
@@ -423,11 +423,12 @@ enum Discovery {
             }
         }
 
-        guard inFrontmatter, let resolvedName = name, !resolvedName.isEmpty else {
+        guard hasClosingDelimiter,
+              let resolvedName = name,
+              !resolvedName.isEmpty,
+              description?.isEmpty == false else {
             return nil
         }
-        // description 是 SHOULD requirement，缺失时仍视为可解析但不阻断
-        _ = description
 
         return DiscoveredSkill(
             asFoundPath: asFoundPath,

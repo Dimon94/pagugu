@@ -125,19 +125,43 @@ final class DiscoveryTests: XCTestCase {
 
     // MARK: - 不可解析 SKILL.md = Scan Issue
 
-    func testUnparseableSkillMDRecordsScanIssue() throws {
+    func testInvalidFrontmatterCandidatesRecordIssuesAndMakeScanPartial() throws {
         let root = tmp.appendingPathComponent("skills")
-        let bad = root.appendingPathComponent("bad-skill")
-        try fm.createDirectory(at: bad, withIntermediateDirectories: true)
-        try "not yaml at all {{{".write(
-            to: bad.appendingPathComponent("SKILL.md"),
-            atomically: true, encoding: .utf8
-        )
+        let invalidCandidates = [
+            ("missing-opening", "name: missing-opening\ndescription: Test\n---\n"),
+            ("missing-closing", "---\nname: missing-closing\ndescription: Test\n"),
+            ("empty", "---\n---\n"),
+            ("missing-name", "---\ndescription: Test\n---\n"),
+            ("blank-name", "---\nname:   \ndescription: Test\n---\n"),
+            ("missing-description", "---\nname: missing-description\n---\n"),
+            ("blank-description", "---\nname: blank-description\ndescription:   \n---\n"),
+        ]
+        var candidatePaths = Set<String>()
+
+        for (directoryName, content) in invalidCandidates {
+            let candidate = root.appendingPathComponent(directoryName)
+            try fm.createDirectory(at: candidate, withIntermediateDirectories: true)
+            try content.write(
+                to: candidate.appendingPathComponent("SKILL.md"),
+                atomically: true,
+                encoding: .utf8
+            )
+            candidatePaths.insert(candidate.path)
+        }
 
         let result = Discovery.scanPersonalRoots([root.path])
-        XCTAssertTrue(result.skills.isEmpty, "unparseable SKILL.md should not be a Skill")
-        XCTAssertFalse(result.issues.isEmpty, "should record Scan Issue")
-        XCTAssertEqual(result.issues.first?.path, bad.path)
+
+        XCTAssertTrue(result.skills.isEmpty, "不合格的 SKILL.md 不得成为 Skill")
+        XCTAssertEqual(Set(result.issues.map(\.path)), candidatePaths, "每个磁盘候选都应留下 Scan Issue")
+        XCTAssertTrue(
+            result.issues.allSatisfy { !$0.reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
+            "Scan Issue 应说明原因"
+        )
+        if case .partial = result.outcome {
+            // 预期结果
+        } else {
+            XCTFail("存在不合格候选时，扫描结果应为 partial")
+        }
     }
 
     // MARK: - 无 SKILL.md 的目录不被发现
