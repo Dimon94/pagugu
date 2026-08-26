@@ -272,8 +272,13 @@ enum Discovery {
             }
 
             var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: childPath, isDirectory: &isDir), isDir.boolValue else {
-                continue // 跳过文件
+            let exists = fm.fileExists(atPath: childPath, isDirectory: &isDir)
+            guard exists, isDir.boolValue else {
+                if !exists, (try? fm.destinationOfSymbolicLink(atPath: childPath)) != nil {
+                    issues.append(ScanIssue(path: childPath, reason: "软链接目标不存在或不可访问"))
+                    partial = true
+                }
+                continue // 跳过非目录条目
             }
 
             scanDirectory(

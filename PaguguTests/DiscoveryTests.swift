@@ -123,6 +123,28 @@ final class DiscoveryTests: XCTestCase {
         }
     }
 
+    func testDanglingSymlinkRecordsPartialScanIssue() throws {
+        let root = tmp.appendingPathComponent("skills")
+        try writeSkill(at: root.appendingPathComponent("healthy-skill"), name: "healthy")
+        let dangling = root.appendingPathComponent("dangling-skill")
+        try fm.createSymbolicLink(
+            at: dangling,
+            withDestinationURL: root.appendingPathComponent("missing-target")
+        )
+
+        let result = Discovery.scanPersonalRoots([root.path])
+
+        XCTAssertEqual(result.skills.map(\.name), ["healthy"], "其余完好目录仍应正常扫描")
+        XCTAssertEqual(result.issues.count, 1, "断链不能静默跳过")
+        XCTAssertEqual(result.issues.first?.path, dangling.path, "Scan Issue 保留 as-found 路径")
+        XCTAssertTrue(result.issues.first?.reason.contains("软链接") == true, "Scan Issue 应说明断链原因")
+        if case .partial = result.outcome {
+            // 预期结果
+        } else {
+            XCTFail("断链应使其余成功的扫描结果标记为 partial")
+        }
+    }
+
     // MARK: - 不可解析 SKILL.md = Scan Issue
 
     func testInvalidFrontmatterCandidatesRecordIssuesAndMakeScanPartial() throws {
