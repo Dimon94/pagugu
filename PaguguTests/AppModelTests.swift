@@ -9,6 +9,22 @@ final class AppModelTests: XCTestCase {
         case beforeReplace
     }
 
+    private enum TestUnclassifiedResetFailure: Error {
+        case failed
+    }
+
+    private struct UnclassifiedFailingRegistryResetter: RegistryResetting {
+        func reset(confirmed _: Bool) async throws -> URL? {
+            throw TestUnclassifiedResetFailure.failed
+        }
+    }
+
+    private struct CancellingRegistryResetter: RegistryResetting {
+        func reset(confirmed _: Bool) async throws -> URL? {
+            throw CancellationError()
+        }
+    }
+
     private var tmp: URL!
     private let fm = FileManager.default
 
@@ -526,6 +542,53 @@ final class AppModelTests: XCTestCase {
         }
         XCTAssertFalse(model.canStartCheckRun)
         XCTAssertTrue(model.checkRunDisabledReason.contains("重新扫描"))
+    }
+
+    @MainActor
+    func testResetWithoutConfirmationKeepsExistingRecoveryWithoutFallback() async throws {
+        let dataDirectory = tmp.appendingPathComponent("data")
+        try fm.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
+        try Data("{".utf8).write(to: dataDirectory.appendingPathComponent("registry.json"))
+        let model = AppModel(
+            personalRoots: [],
+            persistence: Persistence(directoryURL: dataDirectory)
+        )
+        await model.start()
+        let originalRecovery = try XCTUnwrap(model.registryRecovery)
+
+        await model.resetRegistry(confirmed: false)
+
+        XCTAssertEqual(model.registryRecovery, originalRecovery)
+        XCTAssertFalse(model.registryReady)
+        XCTAssertNil(model.projectScanRootError)
+        XCTAssertTrue(model.readModel.isEmpty)
+    }
+
+    @MainActor
+    func testResetIntentIgnoresCancellationAndProjectsUnclassifiedFailure() async {
+        let failingModel = AppModel(
+            personalRoots: [],
+            persistence: Persistence(directoryURL: tmp.appendingPathComponent("failing-data")),
+            registryResetter: UnclassifiedFailingRegistryResetter()
+        )
+        await failingModel.start()
+
+        await failingModel.resetRegistry(confirmed: true)
+
+        XCTAssertEqual(failingModel.projectScanRootError, .notLoaded)
+        XCTAssertTrue(failingModel.registryReady)
+
+        let cancellingModel = AppModel(
+            personalRoots: [],
+            persistence: Persistence(directoryURL: tmp.appendingPathComponent("cancelling-data")),
+            registryResetter: CancellingRegistryResetter()
+        )
+        await cancellingModel.start()
+
+        await cancellingModel.resetRegistry(confirmed: true)
+
+        XCTAssertNil(cancellingModel.projectScanRootError)
+        XCTAssertTrue(cancellingModel.registryReady)
     }
 
     @MainActor

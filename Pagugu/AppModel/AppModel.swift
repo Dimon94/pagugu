@@ -1,6 +1,7 @@
 import Foundation
 
 // L3 COORD: Pagugu/AppModel/AppModel.swift
+// OUTPUT: AppModel UI intent/只读投影，以及只供 composition root 注入的 RegistryResetting reset seam。
 // POS: AppModel 模块（ADR-0009 §7）。@MainActor composition root：
 //      owns Skill Read Model、受限恢复与来源映射错误投影、目录收起、Check/Update 瞬态、全部 UI intent
 //      与启动/刷新编排；每次发布按实时事实重推导观察 freshness。取消确认后，目标检出在新的成功检查前
@@ -53,6 +54,13 @@ struct UpdateRefreshFailure: Equatable, Sendable {
     let issueCount: Int
 }
 
+/// AppModel 的 Registry reset seam。生产使用 AppRegistry；测试注入失败只验证 intent 投影。
+protocol RegistryResetting: Sendable {
+    func reset(confirmed: Bool) async throws -> URL?
+}
+
+extension AppRegistry: RegistryResetting {}
+
 @MainActor
 final class AppModel: ObservableObject {
 
@@ -81,6 +89,7 @@ final class AppModel: ObservableObject {
 
     private let personalRoots: [String]
     private let registry: AppRegistry
+    private let registryResetter: any RegistryResetting
     private let audit: AuditEvidence
     private let gitInspector: any GitInspecting
     private let gitExecutor: any GitExecuting
@@ -94,10 +103,13 @@ final class AppModel: ObservableObject {
         personalRoots: [String] = Discovery.personalSkillRoots,
         persistence: Persistence = .live,
         gitInspector: any GitInspecting = GitClient(),
-        gitExecutor: any GitExecuting = GitClient()
+        gitExecutor: any GitExecuting = GitClient(),
+        registryResetter: (any RegistryResetting)? = nil
     ) {
+        let registry = AppRegistry(persistence: persistence, personalRoots: personalRoots)
         self.personalRoots = personalRoots
-        self.registry = AppRegistry(persistence: persistence, personalRoots: personalRoots)
+        self.registry = registry
+        self.registryResetter = registryResetter ?? registry
         self.audit = AuditEvidence(persistence: persistence)
         self.gitInspector = gitInspector
         self.gitExecutor = gitExecutor
@@ -597,16 +609,22 @@ final class AppModel: ObservableObject {
             }
     }
 
-    /// 显式确认后清空三类 Registry 主张；成功后呈现 quarantine 备份路径并恢复完整扫描。
+    // L4 IN: confirmed 只接受显式确认结果。
+    // OUT: 成功后呈现 quarantine 备份路径并恢复完整扫描。
+    // FAIL: 未确认与任务取消不改变现有受限恢复态；其余错误必须投影稳定反馈。
+    // TEST: repo://PaguguTests/AppModelTests.swift（未确认、取消、未分类错误与写失败）。
     func resetRegistry(confirmed: Bool) async {
         do {
-            let backupURL = try await registry.reset(confirmed: confirmed)
+            let backupURL = try await registryResetter.reset(confirmed: confirmed)
             registryRecovery = nil
             registryReady = true
             projectScanRootError = nil
             sourceMappingError = nil
             registryResetBackupPath = backupURL?.path
             await publishDiscovery()
+        } catch let error as ProjectScanRootError
+            where error == .persistence(.resetConfirmationRequired) {
+            // 未确认是调用合同内的预期结果。保持现有受限恢复态。
         } catch let error as ProjectScanRootError {
             if case .persistence(.writeFailed(let recovery)) = error {
                 projectScanRootError = error
@@ -616,8 +634,10 @@ final class AppModel: ObservableObject {
                 return
             }
             handleProjectScanRootError(error)
+        } catch is CancellationError {
+            // 任务取消不冒充 Registry 写失败。保持调用前状态。
         } catch {
-            // 未确认与其他失败保持现有阻断态，不制造内存 fallback。
+            projectScanRootError = .notLoaded
         }
     }
 
