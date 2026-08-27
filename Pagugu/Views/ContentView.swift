@@ -15,6 +15,7 @@ import UniformTypeIdentifiers
 //      详情标注「当时记录」，失败无 stderr/命令复制/重试，只导航相关 Skill；损坏呈现「历史不可用」）；
 //      Registry 故障由全窗口门面接管，重置后呈现 quarantine 备份路径横幅；
 //      「退出自行修复」只发 AppModel.requestQuit，不直接 terminate。
+//      欢迎引导消费正式 Pagugu Logo 与暖米白主题背景。
 //      全部视觉常量消费 DesignTokens（repo://Pagugu/Views/DesignTokens.swift），不逐组件手写冲突值。
 //      View 只消费 Skill Read Model 与审计投影、只发 AppModel intent，不做 IO。
 // TEST: repo://PaguguTests/AppModelTests.swift（投影与 intent smoke）；
@@ -1708,7 +1709,15 @@ private struct WelcomePanel: View {
 
     var body: some View {
         ContentUnavailableView {
-            Label("欢迎使用 Pagugu", systemImage: "shippingbox")
+            VStack(spacing: DesignTokens.Space.block) {
+                Image("PaguguLogoRounded")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: DesignTokens.Size.welcomeLogo, height: DesignTokens.Size.welcomeLogo)
+                    .accessibilityHidden(true)
+                Text("欢迎使用 Pagugu")
+                    .font(DesignTokens.Fonts.heading)
+            }
         } description: {
             Text("Pagugu 自动发现三个 Personal Skill Root 下的 Skill。\n从左侧目录选择一个 Skill 查看详情，或添加 Project Scan Root 扩展扫描范围。")
         } actions: {
@@ -1717,6 +1726,8 @@ private struct WelcomePanel: View {
             }
             .buttonStyle(.borderedProminent)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(DesignTokens.Brand.themeBackground)
     }
 }
 

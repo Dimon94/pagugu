@@ -1,7 +1,7 @@
 import SwiftUI
 
 // L3 COORD: Pagugu/Views/DesignTokens.swift
-// POS: 设计令牌唯一定义点（#28）。语义状态色、字号梯度、间距/圆角/尺寸令牌与按压反馈集中在此；
+// POS: 设计令牌唯一定义点（#28）。品牌色、语义状态色、字号梯度、间距/圆角/尺寸令牌与按压反馈集中在此；
 //      目录、详情、结果区与各 sheet 一律消费令牌，不逐组件手写冲突值。
 //      ChunUI 兼容性结论为不引入（repo://docs/product/chunui-compatibility.md），
 //      以原生 SwiftUI 系统动态语义色与材质达成同等令牌化，明暗两态可辨由系统语义色保证。
@@ -12,6 +12,17 @@ import SwiftUI
 /// 设计令牌（Design Tokens）：主窗口全部视觉常量的唯一来源。
 /// 约定：新增视觉常量先在这里定义并被消费；View 内不手写与之冲突的字面值。
 enum DesignTokens {
+    // MARK: - 品牌色（C1-T4「探壳」正式方案）
+
+    enum Brand {
+        /// 主背景与品牌暖米白
+        static let themeBackground = Color(red: 244 / 255, green: 235 / 255, blue: 221 / 255)
+        /// 壳与眼睛的午夜靛紫，也是交互强调色
+        static let accent = Color(red: 41 / 255, green: 36 / 255, blue: 92 / 255)
+        /// 身体与双钳的暖金黄
+        static let character = Color(red: 239 / 255, green: 182 / 255, blue: 62 / 255)
+    }
+
     // MARK: - 间距（紧凑桌面密度，4pt 步进）
 
     enum Space {
@@ -45,6 +56,8 @@ enum DesignTokens {
     // MARK: - 尺寸
 
     enum Size {
+        /// 欢迎页品牌 Logo
+        static let welcomeLogo: CGFloat = 112
         /// 宿主 logo 占位圆点直径
         static let hostLogoDot: CGFloat = 8
         /// 目录 chevron 独立热区

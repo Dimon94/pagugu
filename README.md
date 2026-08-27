@@ -1,5 +1,7 @@
 # Pagugu
 
+![Pagugu Logo](docs/product/assets/brand/pagugu-logo-rounded.png)
+
 Pagugu 是一个面向 Codex 与 Claude Code 的本地 macOS Agent Skill 管理与安全同步应用。
 
 当前仓库只包含可运行的技术基线：SwiftUI 主窗口、状态栏入口、构建脚本和工程治理文档。Skill 扫描、状态检查、每日检查与 Git 更新尚未实现。

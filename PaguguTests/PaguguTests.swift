@@ -142,6 +142,12 @@ final class PaguguTests: XCTestCase {
 
     // MARK: - Design Tokens（#28：令牌不变量；错误实现会漂密度、按压或状态色）
 
+    func testBrandPaletteMatchesConfirmedLogo() {
+        XCTAssertEqual(DesignTokens.Brand.themeBackground, Color(red: 244 / 255, green: 235 / 255, blue: 221 / 255))
+        XCTAssertEqual(DesignTokens.Brand.accent, Color(red: 41 / 255, green: 36 / 255, blue: 92 / 255))
+        XCTAssertEqual(DesignTokens.Brand.character, Color(red: 239 / 255, green: 182 / 255, blue: 62 / 255))
+    }
+
     func testChildIndentEqualsDisclosureHotspotPlusRowSpacing() {
         XCTAssertEqual(
             DesignTokens.Size.childIndent,
