@@ -152,7 +152,7 @@ final class IdentityTests: XCTestCase {
 
     func testContentsGroupsSkillsOfSameSourceIntoOneRepositoryRow() {
         // 套件型仓库：同一工作树根下的多个 Skill 聚合为一行来源仓库（ADR-0001 §2：本地键 = 仓库 canonical 路径）
-        let root = "/Users/dimon/suite-repo"
+        let root = ("~/suite-repo" as NSString).expandingTildeInPath
         let skills = [
             DiscoveredSkill(
                 asFoundPath: "~/suite-repo/skills/skill-a",
@@ -187,10 +187,11 @@ final class IdentityTests: XCTestCase {
 
     func testContentsAggregatesInstallationsAcrossRootsForSameSkill() {
         // 跨 root 发现同一 canonical path（软链接指向仓库内 Skill）→ 1 个 Skill、2 个 Installation（ADR-0001 §3）
-        let root = "/Users/dimon/suite-repo"
+        let asFoundRoot = "/var/folders/pagugu-ci/suite-repo"
+        let root = "/private/var/folders/pagugu-ci/suite-repo"
         let skills = [
             DiscoveredSkill(
-                asFoundPath: "~/suite-repo/skills/git-commit",
+                asFoundPath: asFoundRoot + "/skills/git-commit",
                 canonicalPath: root + "/skills/git-commit",
                 name: "git-commit",
                 repositoryRootPath: root
@@ -214,24 +215,30 @@ final class IdentityTests: XCTestCase {
         )
         let linked = entry.installations.first { $0.asFoundPath == "~/.claude/skills/git-commit" }
         XCTAssertEqual(linked?.projectionType, .symlink, "asFound ≠ canonical → 软链接投影")
-        let own = entry.installations.first { $0.asFoundPath == "~/suite-repo/skills/git-commit" }
-        XCTAssertEqual(own?.projectionType, .repositorySelf, "asFound == canonical 且在工作树内 → 仓库本体投影")
+        let own = entry.installations.first { $0.asFoundPath == asFoundRoot + "/skills/git-commit" }
+        XCTAssertEqual(
+            own?.projectionType,
+            .repositorySelf,
+            "/var 与 /private/var 只是系统路径别名，不代表 Skill Installation 是软链接"
+        )
     }
 
     func testContentsSeparatesSameNameDifferentSource() {
         // 同名异源：name 相同但仓库根不同 → 各自成行，来源标识不串行（ADR-0001 §5）
+        let repoA = ("~/repo-a" as NSString).expandingTildeInPath
+        let repoB = ("~/repo-b" as NSString).expandingTildeInPath
         let skills = [
             DiscoveredSkill(
                 asFoundPath: "~/repo-a/skills/helper",
-                canonicalPath: "/Users/dimon/repo-a/skills/helper",
+                canonicalPath: repoA + "/skills/helper",
                 name: "helper",
-                repositoryRootPath: "/Users/dimon/repo-a"
+                repositoryRootPath: repoA
             ),
             DiscoveredSkill(
                 asFoundPath: "~/repo-b/skills/helper",
-                canonicalPath: "/Users/dimon/repo-b/skills/helper",
+                canonicalPath: repoB + "/skills/helper",
                 name: "helper",
-                repositoryRootPath: "/Users/dimon/repo-b"
+                repositoryRootPath: repoB
             ),
         ]
         let contents = SkillDirectory.contents(from: ScanResult(outcome: .complete, skills: skills, issues: []))
@@ -246,16 +253,18 @@ final class IdentityTests: XCTestCase {
 
     func testContentsMergesIdenticalCopiesByContentFingerprint() {
         // 内容完全一致（指纹相同）的复制投影聚合为一个只读来源不明条目（#16 修正）
+        let claudePath = ("~/.claude/skills/helper" as NSString).expandingTildeInPath
+        let codexPath = ("~/.codex/skills/helper" as NSString).expandingTildeInPath
         let skills = [
             DiscoveredSkill(
                 asFoundPath: "~/.claude/skills/helper",
-                canonicalPath: "/Users/dimon/.claude/skills/helper",
+                canonicalPath: claudePath,
                 name: "helper",
                 contentFingerprint: "aa11"
             ),
             DiscoveredSkill(
                 asFoundPath: "~/.codex/skills/helper",
-                canonicalPath: "/Users/dimon/.codex/skills/helper",
+                canonicalPath: codexPath,
                 name: "helper",
                 contentFingerprint: "aa11"
             ),
@@ -268,7 +277,7 @@ final class IdentityTests: XCTestCase {
         XCTAssertEqual(item.hosts, [.claude, .codex], "宿主槽位按安装事实点亮")
         XCTAssertEqual(
             Set(item.installations.map(\.canonicalPath)),
-            ["/Users/dimon/.claude/skills/helper", "/Users/dimon/.codex/skills/helper"],
+            [claudePath, codexPath],
             "每个 Installation 保留各自 canonical path"
         )
         XCTAssertTrue(item.installations.allSatisfy { $0.projectionType == .copy })
@@ -277,16 +286,18 @@ final class IdentityTests: XCTestCase {
 
     func testContentsDoesNotMergeByNameAlone() {
         // 禁止只按名称合并：同名但内容不同（指纹不同）仍然分开
+        let claudePath = ("~/.claude/skills/helper" as NSString).expandingTildeInPath
+        let codexPath = ("~/.codex/skills/helper" as NSString).expandingTildeInPath
         let skills = [
             DiscoveredSkill(
                 asFoundPath: "~/.claude/skills/helper",
-                canonicalPath: "/Users/dimon/.claude/skills/helper",
+                canonicalPath: claudePath,
                 name: "helper",
                 contentFingerprint: "aa11"
             ),
             DiscoveredSkill(
                 asFoundPath: "~/.codex/skills/helper",
-                canonicalPath: "/Users/dimon/.codex/skills/helper",
+                canonicalPath: codexPath,
                 name: "helper",
                 contentFingerprint: "bb22"
             ),
@@ -299,15 +310,17 @@ final class IdentityTests: XCTestCase {
 
     func testContentsNeverMergesWhenFingerprintMissing() {
         // fail closed：内容无法完整读取（无指纹）时不自动合并，即使同名同指纹缺失
+        let claudePath = ("~/.claude/skills/helper" as NSString).expandingTildeInPath
+        let codexPath = ("~/.codex/skills/helper" as NSString).expandingTildeInPath
         let skills = [
             DiscoveredSkill(
                 asFoundPath: "~/.claude/skills/helper",
-                canonicalPath: "/Users/dimon/.claude/skills/helper",
+                canonicalPath: claudePath,
                 name: "helper"
             ),
             DiscoveredSkill(
                 asFoundPath: "~/.codex/skills/helper",
-                canonicalPath: "/Users/dimon/.codex/skills/helper",
+                canonicalPath: codexPath,
                 name: "helper"
             ),
         ]
@@ -403,6 +416,7 @@ final class IdentityTests: XCTestCase {
 
     func testContentsNeverMergesZeroInstallationRepoLessSkills() {
         // 零安装的纯来源发现永不按指纹合并：身份即自身位置，内容一致不推断同一 Skill
+        let installedPath = ("~/.claude/skills/helper" as NSString).expandingTildeInPath
         let skills = [
             DiscoveredSkill(
                 asFoundPath: "~/Code/work-in-progress/helper",
@@ -413,7 +427,7 @@ final class IdentityTests: XCTestCase {
             ),
             DiscoveredSkill(
                 asFoundPath: "~/.claude/skills/helper",
-                canonicalPath: "/Users/dimon/.claude/skills/helper",
+                canonicalPath: installedPath,
                 name: "helper",
                 contentFingerprint: "aa11"
             ),

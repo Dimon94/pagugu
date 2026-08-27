@@ -225,9 +225,18 @@ enum SkillDirectory {
         return remoteKey
     }
 
+    /// L4 IN: `asFoundPath` 保留发现入口形式，`canonicalPath` 已完全解析；`repositoryRootPath` 表示工作树归因。
+    /// OUT: `/var` 与 `/private/var` 系统别名视为同一路径；其他路径差异保持软链接投影。
+    /// INVARIANT: 系统路径别名不得伪造软链接，真实 Skill 软链接不得降级为仓库本体或复制。
+    /// TEST: repo://PaguguTests/IdentityTests.swift `testContentsAggregatesInstallationsAcrossRootsForSameSkill`。
     private static func projectionType(of skill: DiscoveredSkill) -> ProjectionType {
         let expanded = (skill.asFoundPath as NSString).expandingTildeInPath
-        if expanded != skill.canonicalPath { return .symlink }
+        // macOS runner 可能以 /var 暴露路径，而 Canonical Path 使用同一目录的 /private/var 形式。
+        // 只归一该系统别名；解析任意 as-found 软链接会抹掉 Projection Type 事实。
+        let usesVarAlias = expanded == "/var" || expanded.hasPrefix("/var/")
+        let matchesCanonicalPath = expanded == skill.canonicalPath
+            || (usesVarAlias && "/private\(expanded)" == skill.canonicalPath)
+        if !matchesCanonicalPath { return .symlink }
         return skill.repositoryRootPath != nil ? .repositorySelf : .copy
     }
 }
