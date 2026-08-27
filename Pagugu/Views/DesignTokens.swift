@@ -4,7 +4,7 @@ import SwiftUI
 // POS: 设计令牌唯一定义点（#28）。品牌色、语义状态色、字号梯度、间距/圆角/尺寸令牌与按压反馈集中在此；
 //      目录、详情、结果区与各 sheet 一律消费令牌，不逐组件手写冲突值。
 //      ChunUI 兼容性结论为不引入（repo://docs/product/chunui-compatibility.md），
-//      以原生 SwiftUI 系统动态语义色与材质达成同等令牌化，明暗两态可辨由系统语义色保证。
+//      以原生 SwiftUI 系统语义色与材质达成同等令牌化；正式品牌画布固定浅色，状态仍由颜色、图标和文案共同表达。
 //      动效克制：唯一自定义动效是按压反馈（scale 0.96 + 0.1s ease-out）；高频交互无其他自定义动画，
 //      所有状态变化另有颜色/图标/文案静态提示。
 // TEST: repo://PaguguTests/PaguguTests.swift（pressScale、childIndent、状态色语义）。

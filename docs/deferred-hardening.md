@@ -20,3 +20,4 @@
 | 日期 | 条目 | 类别 | 触发场景与影响 | 证据坐标 | 严重度 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | 2026-08-27 | 无新增 | — | 本次只落地品牌资产、AppIcon 与主题色，未发现需延后加固的问题。 | repo://Pagugu/Assets.xcassets、repo://Pagugu/Views/DesignTokens.swift | — | — |
+| 2026-08-27 | 无新增 | — | 本次修复暖米白主题全域覆盖，未发现需延后加固的问题。 | repo://Pagugu/Views/ContentView.swift、repo://Pagugu/Views/MenuBarView.swift | — | — |

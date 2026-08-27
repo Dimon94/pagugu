@@ -7,7 +7,7 @@ Status: runnable discovery、全量手动 Check Run、freshness 重推导、安�
 ## 当前事实
 
 - 产品：Pagugu，本地 macOS Agent Skill 管理与安全同步应用。
-- 当前阶段：可运行发现目录、逐检出实时 Git Fact、全量手动 Check Run、观察 freshness 与重启重推导、安全 Update Run（重查、冻结精确 SHA、确认/取消、ff-only、post-verify、九类失败、完整刷新）、Update start/terminal 与确认前 terminal-only 审计、审计呈现三语义面（工具栏「最近活动」摘要、详情、清空）与孤儿「结果未知（已中断）」呈现、审计损坏 fail-open「历史不可用」、Registry 重置 quarantine 备份路径呈现、App 级 Check/Update 单一互斥、12 态裁决、详情卡片、目录逐态短语/五档静默排序、Project Scan Root 管理与复制 Installation 的人工来源映射、主窗口 Update Run 全流程接线（逐检出更新 intent、多 Eligible 检出当次选择、冻结计划确认页含影响范围名单、结果区六类反馈横幅）。正式 Logo 已接入 AppIcon、状态栏和欢迎页；主窗口视觉令牌集中于 DesignTokens，包含暖米白主题与品牌配色。ChunUI 兼容性验证已完成（不引入，见 docs/product/chunui-compatibility.md）。
+- 当前阶段：可运行发现目录、逐检出实时 Git Fact、全量手动 Check Run、观察 freshness 与重启重推导、安全 Update Run（重查、冻结精确 SHA、确认/取消、ff-only、post-verify、九类失败、完整刷新）、Update start/terminal 与确认前 terminal-only 审计、审计呈现三语义面（工具栏「最近活动」摘要、详情、清空）与孤儿「结果未知（已中断）」呈现、审计损坏 fail-open「历史不可用」、Registry 重置 quarantine 备份路径呈现、App 级 Check/Update 单一互斥、12 态裁决、详情卡片、目录逐态短语/五档静默排序、Project Scan Root 管理与复制 Installation 的人工来源映射、主窗口 Update Run 全流程接线（逐检出更新 intent、多 Eligible 检出当次选择、冻结计划确认页含影响范围名单、结果区六类反馈横幅）。正式 Logo 已接入 AppIcon、状态栏和欢迎页；全部 app-owned 界面固定浅色并使用 DesignTokens 中的暖米白主题与品牌配色。ChunUI 兼容性验证已完成（不引入，见 docs/product/chunui-compatibility.md）。
 - 技术栈：原生 Xcode macOS App、SwiftUI、Swift 6、macOS 14+。
 - 运行入口：`Pagugu/App/PaguguApp.swift`；稳定本地入口为 `script/build_and_run.sh`。
 - 分发：本地构建；App Sandbox 关闭。签名、公证和 GitHub Releases 尚未实现。
@@ -46,10 +46,10 @@ Status: runnable discovery、全量手动 Check Run、freshness 重推导、安�
 
 | Module | Owns | Does not own | Public interface | Depends on | Verification |
 | --- | --- | --- | --- | --- | --- |
-| PaguguApp | 应用生命周期、主窗口、正式 AppIcon 与状态栏 Logo 场景 | Skill 扫描、Git 状态、持久化 | macOS App 入口 | SwiftUI、AppKit、Assets.xcassets | `script/build_and_run.sh --verify` |
-| ContentView | 主窗口 Variant F IA；显示目录状态短语、唯一手动检查入口、结果区六类反馈横幅与逐检出卡片（含更新 intent）；更新确认 sheet（多检出当次选择 + 冻结计划 + 影响范围名单）；逐 Installation 来源映射、失效原因与删除确认；扫描范围管理、「最近活动」三语义面与 Registry 故障阻断 | Skill Read Model 派生、Checkout Git State/Run 裁决、目录排序、审计投影派生、IO、视觉令牌定义 | SwiftUI `View` | SwiftUI、AppModel、DesignTokens | App build |
-| MenuBarView | 打开主窗口与退出动作 | 更新状态和后台调度 | SwiftUI `View` | SwiftUI、AppKit | App build + launch |
-| DesignTokens | 主窗口视觉令牌（品牌与主题色、间距、圆角、尺寸、字号、语义状态色、表面材质、按压反馈） | 业务状态裁决、ChunUI、IA 语义 | `DesignTokens` enum、`PressFeedbackButtonStyle` | SwiftUI | `PaguguTests` 令牌不变量 |
+| PaguguApp | 应用生命周期、固定浅色主窗口、正式 AppIcon 与可着色状态栏窗口场景 | Skill 扫描、Git 状态、持久化 | macOS App 入口 | SwiftUI、AppKit、Assets.xcassets | `script/build_and_run.sh --verify` |
+| ContentView | 主窗口 Variant F IA、暖米白根画布与窗口工具栏；显示目录状态短语、唯一手动检查入口、结果区六类反馈横幅与逐检出卡片（含更新 intent）；更新确认 sheet（多检出当次选择 + 冻结计划 + 影响范围名单）；逐 Installation 来源映射、失效原因与删除确认；扫描范围管理、「最近活动」三语义面与 Registry 故障阻断 | Skill Read Model 派生、Checkout Git State/Run 裁决、目录排序、审计投影派生、IO、视觉令牌定义 | SwiftUI `View` | SwiftUI、AppModel、DesignTokens | App build |
+| MenuBarView | 暖米白状态栏窗口内的打开主窗口与退出动作 | 更新状态和后台调度 | SwiftUI `View` | SwiftUI、AppKit、DesignTokens | App build + launch |
+| DesignTokens | app-owned 界面视觉令牌（品牌与暖米白全局画布、间距、圆角、尺寸、字号、语义状态色、表面材质、按压反馈） | 业务状态裁决、ChunUI、IA 语义 | `DesignTokens` enum、`PressFeedbackButtonStyle` | SwiftUI | `PaguguTests` 令牌不变量 |
 | AppIdentity | 产品展示名、Bundle ID、主窗口 ID | 用户配置 | 静态常量 | Swift 标准库 | `PaguguTests.testProductIdentity` |
 | Discovery | Discovery Scan：遍历全部 Scan Root、发现入口标注；Project Scan Root 集中排除 `.git`、依赖与构建产物目录并设 10 层深度保险，denylist 命中记 Scan Issue 但仍为 complete，第 11 层截断记 Issue/partial；软链接解析、Canonical Path 去重防环、SKILL.md 解析校验与原文读取、Git 工作树根检测（`.git` 存在性）、复制投影内容指纹（SHA-256，fail closed） | 身份归因与指纹聚合（归 Identity）、Git 子进程 | `Discovery.scanAll(personalRoots:projectRoots:)`、`scanPersonalRoots(_:)`、`scanProjectRoot(_:)`、`skillMarkdown(atCanonicalPath:)`、`contentFingerprint(ofSkillAtCanonicalPath:)` | Foundation、CryptoKit | `PaguguTests/DiscoveryTests.swift` |
 | Identity | Skill Source Key 规范化、人工映射重验证、归因与聚合、Skill Source Checkout、同一 remote 多检出及逐检出 Skill 成员清单（全部纯函数） | 文件系统遍历、Git 调用、状态裁决与主张写入 | `SkillSourceKey.normalize(remoteURL:)`、`SkillDirectory.contents(from:gitFactsByCheckoutPath:mappings:)` | Foundation、Discovery/Git/Persistence 值类型 | `PaguguTests/IdentityTests.swift`、`AppModelTests.swift` |

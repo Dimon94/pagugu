@@ -148,6 +148,50 @@ final class PaguguTests: XCTestCase {
         XCTAssertEqual(DesignTokens.Brand.character, Color(red: 239 / 255, green: 182 / 255, blue: 62 / 255))
     }
 
+    func testBrandThemeCoversAllAppOwnedSurfaces() throws {
+        let repositoryURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let appSource = try String(
+            contentsOf: repositoryURL.appendingPathComponent("Pagugu/App/PaguguApp.swift"),
+            encoding: .utf8
+        )
+        let contentSource = try String(
+            contentsOf: repositoryURL.appendingPathComponent("Pagugu/Views/ContentView.swift"),
+            encoding: .utf8
+        )
+        let menuSource = try String(
+            contentsOf: repositoryURL.appendingPathComponent("Pagugu/Views/MenuBarView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(
+            appSource.contains(".preferredColorScheme(.light)"),
+            "暖米白主题必须固定浅色呈现，避免深色模式文字失去对比"
+        )
+        XCTAssertTrue(
+            appSource.contains(".menuBarExtraStyle(.window)"),
+            "状态栏内容必须使用可着色的 window style"
+        )
+        XCTAssertTrue(
+            contentSource.contains(".background(DesignTokens.Brand.themeBackground, ignoresSafeAreaEdges: .all)"),
+            "暖米白主题必须覆盖主窗口根画布"
+        )
+        XCTAssertTrue(
+            contentSource.contains(".toolbarBackground(DesignTokens.Brand.themeBackground, for: .windowToolbar)"),
+            "暖米白主题必须覆盖主窗口工具栏"
+        )
+        XCTAssertEqual(
+            contentSource.components(separatedBy: ".scrollContentBackground(.hidden)").count - 1,
+            4,
+            "四个 List 都必须移除遮挡主题色的系统滚动背景"
+        )
+        XCTAssertTrue(
+            menuSource.contains(".background(DesignTokens.Brand.themeBackground)"),
+            "状态栏窗口必须使用暖米白背景"
+        )
+    }
+
     func testChildIndentEqualsDisclosureHotspotPlusRowSpacing() {
         XCTAssertEqual(
             DesignTokens.Size.childIndent,

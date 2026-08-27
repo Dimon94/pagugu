@@ -15,7 +15,7 @@ import UniformTypeIdentifiers
 //      详情标注「当时记录」，失败无 stderr/命令复制/重试，只导航相关 Skill；损坏呈现「历史不可用」）；
 //      Registry 故障由全窗口门面接管，重置后呈现 quarantine 备份路径横幅；
 //      「退出自行修复」只发 AppModel.requestQuit，不直接 terminate。
-//      欢迎引导消费正式 Pagugu Logo 与暖米白主题背景。
+//      主窗口根画布、四个 List 与全部 app-owned sheet 消费正式暖米白主题；欢迎引导展示正式 Pagugu Logo。
 //      全部视觉常量消费 DesignTokens（repo://Pagugu/Views/DesignTokens.swift），不逐组件手写冲突值。
 //      View 只消费 Skill Read Model 与审计投影、只发 AppModel intent，不做 IO。
 // TEST: repo://PaguguTests/AppModelTests.swift（投影与 intent smoke）；
@@ -43,6 +43,7 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 860, minHeight: 560)
+        .background(DesignTokens.Brand.themeBackground, ignoresSafeAreaEdges: .all)
         .task {
             await model.start()
         }
@@ -133,6 +134,7 @@ struct ContentView: View {
                 ResultAreaView(model: model)
                 detailView
             }
+            .background(DesignTokens.Brand.themeBackground)
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -164,6 +166,8 @@ struct ContentView: View {
                 }
             }
         }
+        .toolbarBackground(DesignTokens.Brand.themeBackground, for: .windowToolbar)
+        .toolbarBackground(.visible, for: .windowToolbar)
     }
 
     // MARK: - 右侧详情（与目录选择联动；空选择或选择失效回欢迎引导）
@@ -488,6 +492,7 @@ private struct UpdateConfirmationSheet: View {
         }
         .padding(DesignTokens.Space.sheetPadding)
         .frame(minWidth: 560, minHeight: 240)
+        .background(DesignTokens.Brand.themeBackground)
         .onAppear {
             selectedCheckoutPath = preselectedCheckoutPath ?? eligibleCheckoutPaths.first
         }
@@ -604,6 +609,7 @@ private struct PreparedUpdateSheet: View {
         }
         .padding(DesignTokens.Space.sheetPadding)
         .frame(minWidth: 620, minHeight: 360)
+        .background(DesignTokens.Brand.themeBackground)
     }
 }
 
@@ -668,6 +674,8 @@ private struct ProjectScanRootManagementView: View {
                         .accessibilityLabel("删除扫描范围 \(root.asFoundPath)")
                     }
                 }
+                .scrollContentBackground(.hidden)
+                .background(DesignTokens.Brand.themeBackground)
             }
 
             HStack {
@@ -683,6 +691,7 @@ private struct ProjectScanRootManagementView: View {
         }
         .padding(DesignTokens.Space.sheetPadding)
         .frame(minWidth: 660, minHeight: 420)
+        .background(DesignTokens.Brand.themeBackground)
     }
 }
 
@@ -784,6 +793,8 @@ private struct SkillDirectoryListView: View {
                         }
                     }
                 }
+                .scrollContentBackground(.hidden)
+                .background(DesignTokens.Brand.themeBackground)
             }
         }
         .navigationTitle("Skills")
@@ -1646,11 +1657,14 @@ private struct SourceMappingSheet: View {
                         }
                     }
                 }
+                .scrollContentBackground(.hidden)
+                .background(DesignTokens.Brand.themeBackground)
                 .searchable(text: $query, prompt: "筛选 Skill 或来源")
             }
         }
         .padding(DesignTokens.Space.sheetPadding)
         .frame(minWidth: 680, minHeight: 480)
+        .background(DesignTokens.Brand.themeBackground)
     }
 
     private var filteredGroups: [MappingTargetGroup] {
@@ -1771,6 +1785,8 @@ private struct RecentActivitySheet: View {
                     AuditActivityRow(item: item)
                         .tag(item.id)
                 }
+                .scrollContentBackground(.hidden)
+                .background(DesignTokens.Brand.themeBackground)
 
                 if let item = history.items.first(where: { $0.id == selectedItemID }) {
                     AuditRecordDetailView(item: item, openSkill: openSkill)
@@ -1790,6 +1806,7 @@ private struct RecentActivitySheet: View {
         }
         .padding(DesignTokens.Space.sheetPadding)
         .frame(minWidth: 660, minHeight: 480)
+        .background(DesignTokens.Brand.themeBackground)
         .alert("确认清空审计历史？", isPresented: $showsClearConfirmation) {
             Button("取消", role: .cancel) {}
             Button("清空历史", role: .destructive) {
