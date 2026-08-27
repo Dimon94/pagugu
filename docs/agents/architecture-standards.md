@@ -61,6 +61,8 @@ Owner 为 Unknown 时，先把 Unknown 写进 System Map。不要用目录位置
 
 优先使用小而完整的 interface 隐藏 caller 不应重复知道的复杂度。
 
+未解释的复杂度必须自证：问 helper、layer、特例或抽象被删除、内联、重命名或简化后会出现什么具体问题。答不出具体问题时，优先简单、自解释的代码和少量连贯抽象。
+
 不要用代码行数衡量 depth。使用 deletion test：
 
 - 删除后，规则、错误和恢复逻辑会散到多个 caller：module 提供 leverage，应保留或加深。
@@ -73,7 +75,8 @@ Owner 为 Unknown 时，先把 Unknown 写进 System Map。不要用目录位置
 - Interface 只暴露 caller 必须知道的事实。
 - 内部 test seam 不因测试方便进入 public interface。
 - 同一规则只保留一个 canonical implementation。
-- Compatibility shim 必须委托 canonical implementation，并有删除条件。
+- Compatibility shim 必须委托 canonical implementation，并有删除条件；无真实存量用户时不引入 shim，直接 clean-break。
+- 评估公开 API 站在 caller 视角：可发现性、防误用、错误语义、配置面和演进路径。与本地约定不一致的行业通行做法做对照，有意偏离时说明理由。
 
 ## 7. Seam 与 Adapter
 

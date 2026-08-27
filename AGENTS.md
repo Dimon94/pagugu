@@ -11,11 +11,21 @@
 真相优先级：运行证据和持久状态 > 源码与测试 > 仓库文档和 accepted ADR > 当前官方文档 > 推理。
 </project>
 
+<stage>
+当前阶段：Needs-Confirmation（用户确认后替换本行，并按项目实际改写下面的核心职责）。
+本阶段工时只排给核心职责：打通整套系统工作流程、落地基础功能、完善运行链路、完善对外 API 接口、把上述能力部署到线上内测环境。
+深度测试工程、安全扫描、网络安全专项和全面生产加固在本阶段登记进 repo://docs/deferred-hardening.md，不占用本阶段工时；只有用户明确要求时才执行。
+审查照常报告安全与测试缺口，严重度按 repo://docs/agents/quality-standards.md 第 2 节判定。阻断当前正确性的安全、数据损坏和不可用问题当次修复，不进清单。
+每次对话的工作收口时更新 repo://docs/deferred-hardening.md。
+阶段退出信号：清单出现 P0 或 P1 条目；核心链路已稳定且用户开始承接外部真实流量或正式发布；用户提出安全、合规或稳定性承诺。命中任一信号时在对话中输出这句提醒：“项目应该进入下一阶段，应该更新 agents了”，并列出触发它的条目坐标。用户确认后再改本节。
+</stage>
+
 <workflow>
 改前读取目标文件最近的 AGENTS.md、直接调用者、公开入口、相关测试和相关配置。
 先复用现有模块、类型、schema、helper 和脚本。再使用标准库、运行时原生能力和已安装依赖。最后才写最少新代码。
 一次变更只解决一个可独立验证的语义目标。保留用户的无关改动。
 复杂任务先分清现象、根因和设计不变量，再给最小动作。
+歧义只在答案会实质改变结果、范围、风险或授权时才提问；其余陈述假设并继续。多条路径存在实质取舍时推荐一条并说明理由。
 用户要求“确认后执行”时，只给方案，不修改文件。
 完整开发流程见 repo://docs/agents/development-workflow.md。触发：实现功能、修复缺陷、重构、集成或交付。
 调试闭环见 repo://docs/agents/debugging.md。触发：错误、失败、性能回归、环境不一致或改动不生效。
@@ -29,7 +39,7 @@ Issue、代码和 CI/CD 计划归 GitHub，项目坐标 `Dimon94/pagugu`；公�
 <branching>
 主目录永远只 checkout main，单会话改动直接在 main。只有 herdr 分派并行任务时才一票一树：`git worktree add` 从 main 最新 commit 建树，任务分支随树创建、只存在于树内。
 main 只接收已验证提交；票收口即删树删分支。
-详细规则见 repo://docs/agents/git-branching.md。触发：开/切/合/删分支、worktree、herdr 分派、并行 agent 写入。
+详细规则见 repo://docs/agents/git-branching.md。触发：开/切/合/删分支、push、合并 PR、worktree、herdr 分派、并行 agent 写入。
 </branching>
 
 <architecture>
@@ -49,7 +59,7 @@ main 只接收已验证提交；票收口即删树删分支。
 </layer_contracts>
 
 <code_style>
-写或改代码遵循 repo://docs/agents/coding-standards.md。
+代码规范见 repo://docs/agents/coding-standards.md。触发：新增或修改代码、注释或公开 API 文档。完成：当前 diff 命中的规则已逐项检查。
 局部 AGENTS.md、accepted ADR、外部合同和运行证据优先于通用规范。
 规范只约束当前变更和阻断当前正确性的既有问题。
 </code_style>
@@ -58,7 +68,7 @@ main 只接收已验证提交；票收口即删树删分支。
 Git 只 stage 语义相关路径。不要使用 git add .。
 不提交密钥、环境文件（.env）与一次性证据文件；其余排除项归 .gitignore。
 外部输入在边界校验一次。内部代码使用已校验的类型。
-错误必须显式、稳定、可测试。高风险失败采用 fail closed，并给出自然恢复动作。
+错误必须显式、稳定、可测试。失败语义 fail-close：达不到成功标准的操作明确失败并给出自然恢复动作；每个兜底和 fallback 必须点名防的真实失败场景，答不出来就删除。
 模型只做分类、起草、摘要、抽取和判断。代码负责确定性转换、路由、重试、状态迁移和成本控制。
 </constraints>
 
@@ -67,22 +77,23 @@ Git 只 stage 语义相关路径。不要使用 git add .。
 非琐碎逻辑至少留下一个在错误实现下会失败的检查。
 修复缺陷时，同一最小检查必须先失败后通过。
 跳过测试时说明原因和剩余风险。
-提交、推送、创建 PR 或部署需要用户明确要求。普通实现任务只修改并验证本地工作区。
+审查、审计、解释、报告、计划和提案均为只读交付物，不授权实现。提交、推送、修改或合并 PR、发布和部署需要用户明确要求，或当前任务中已明确确立的工作流。普通实现任务只修改并验证本地工作区。
 </done_definition>
 
 <review_standard>
-先列 Findings。按严重度排序。每条引用文件和行号。
+先枚举审查范围，再列 Findings。按严重度排序，每条引用文件和行号；省略工具已覆盖的通用发现。
 Standards 轴先审 Coding，再审 Architecture。Spec 轴独立核对需求。
 没有 finding 时，也说明测试缺口、未验证路径和剩余风险。
 只报告能由代码、测试、运行证据或合同证明的问题。
-详细检查见 repo://docs/agents/quality-standards.md。触发：代码审查、重构、自检或发现坏味道。
+测试与审查规范见 repo://docs/agents/quality-standards.md。触发：新增、修改或删除测试，评估覆盖面，代码审查、重构、自检或发现坏味道。测试变更完整应用第 6 节；审查完成第 7 节。
 </review_standard>
 
 <principles>
 在满足当前需求的前提下，选择最简单的实现。
+维护工作做定向修改并遵循既有约定；明确要求重新设计、重写或破坏兼容时，从第一原则重新推导，不把最小化和兼容性作为隐藏要求带回。
 先交付可端到端验证的最小切片，再逐步增加能力。
 新增依赖前检查现有依赖、官方文档和类型定义。
-删除废弃的内部代码路径。持久状态和外部合同的破坏性删除必须先证明零读零写，并取得明确授权。
+替换旧设计执行 clean-break：同一次变更彻底切换并删除旧路径，不留新旧并存分支。持久状态和外部合同的破坏性删除必须先证明零读零写，并取得明确授权。
 重复规则和并行机制出现时，读取 repo://docs/agents/entropy-governance.md。
 根因诊断、互斥方案和落地推演时，读取 repo://docs/agents/thinking-model.md。
 </principles>

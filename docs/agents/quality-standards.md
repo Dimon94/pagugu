@@ -1,14 +1,15 @@
 # Quality Standards
 
-用途：代码审查、重构和交付前自检。
+用途：新增、修改或删除测试，以及代码审查、重构和交付前自检。
 
 ## 1. 报告顺序
 
-1. Findings。按严重度排序。
-2. Coding。检查局部正确性、类型、错误、测试和坏味道。
-3. Architecture。检查所有权、依赖、interface 和持久状态。
-4. Spec。独立核对需求和验收标准。
-5. Verification gaps。记录未运行测试、未覆盖路径和剩余风险。
+1. Scope。枚举相关审查范围，按用户影响和风险排定优先级。
+2. Findings。按严重度排序。
+3. Coding。检查局部正确性、类型、错误、测试和坏味道。
+4. Architecture。检查所有权、依赖、interface 和持久状态。
+5. Spec。独立核对需求和验收标准。
+6. Verification gaps。记录未运行测试、未覆盖路径和剩余风险。
 
 每个 finding 必须包含：
 
@@ -18,7 +19,9 @@
 - 证据。
 - 最小修复方向。
 
-没有证据时写 Unknown，不报告为缺陷。
+没有证据时写 Unknown，不报告为缺陷。工具已覆盖的通用或表面发现省略不报。
+
+交付阶段决定 finding 的处理路径，不决定是否报告。根 repo://AGENTS.md `<stage>` 判定为延后的加固类 finding 照常出现在报告里，并登记进 repo://docs/deferred-hardening.md。
 
 ## 2. 严重度
 
@@ -63,14 +66,18 @@
 - Shallow wrapper。
 - Leaky interface。
 - Speculative generality。
-- Silent fallback。
+- Silent fallback（应 fail-close 处静默兜底）。
 - Test past interface。
-- 无删除条件的兼容层。
+- 无删除条件的兼容层（clean-break 不彻底）。
 
 发现坏味道时说明当前影响。不要把审美偏好写成 finding。
 
 ## 6. 测试质量
 
+- 只为现实可观察回归、非琐碎不变量或边界，以及具体缺陷新增测试。代码发生变化或覆盖率上升不能单独证明测试必要。
+- 优先扩展行为边界上的现有覆盖。
+- 测试不镜像字面量、映射、显然控制流或实现细节；已删除能力仅在“不存在”本身是合同时保留测试。
+- 并发测试优先使用确定性协调或受控调度；固定 sleep 只作为无法消除的外部时序边界，并记录剩余不确定性。
 - 检查错误实现是否会失败。
 - 检查是否穿过 public interface。
 - 检查断言是否关注结果和不变量。
@@ -78,8 +85,11 @@
 - 检查 fixture 是否可能访问真实外部系统。
 - 检查时间、随机和并发是否可重复。
 - 检查是否缺少关键负向路径。
+- 测试代码的注释和公开 API 文档遵循 repo://docs/agents/coding-standards.md 第 8 节。
 
 ## 7. 完成条件
+
+测试变更只有在第 6 节所有命中规则均已应用，且每个新增或修改测试会在目标错误实现下失败时完成。
 
 Review 只有在以下条件成立时完成：
 
