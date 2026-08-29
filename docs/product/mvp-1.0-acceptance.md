@@ -6,9 +6,9 @@ Status: frozen（Dimon94/pagugu#11 HITL 冻结，2026-08-24）
 
 ## 1. 验收场景（外部可观察）
 
-**S1 首次启动与扫描范围**：空 Registry 为正常态，右侧详情区显示欢迎引导与「添加 Project Scan Root」；三个 Personal Skill Root 已自动发现并列出（root 不存在为正常空态）。添加 Project Scan Root 后，其内发现的 Skill（含无 Installation 的纯来源 Skill）进入目录；非法选择（文件系统根、Home、Personal Skill Root 本身及其祖先）保存时被拒并给出原因。
+**S1 首次启动与扫描范围**：空 Registry 为正常态，右侧详情区显示欢迎引导与「添加 Project Scan Root」；四个 Personal Skill Root（`~/.claude/skills`、`~/.agents/skills`、`~/.codex/skills`、`~/.pi/agent/skills`）已自动发现并列出（root 不存在为正常空态）。添加 Project Scan Root 后，其内发现的 Skill（含无 Installation 的纯来源 Skill）进入目录；非法选择（文件系统根、Home、Personal Skill Root 本身及其祖先）保存时被拒并给出原因。
 
-**S2 发现与关系**：目录显示仓库条目（含子 Skill 行）与无仓库 Skill 行；宿主 logo 点亮/灰显与安装事实一致；同名异源按仓库行天然区分。
+**S2 发现与关系**：目录显示仓库条目（含子 Skill 行）与无仓库 Skill 行；宿主 logo 点亮/灰显与安装事实一致；Personal `~/.agents/skills` 同时归 Codex 与 Pi，Project `.agents/skills` 只归 Codex；同名异源保持独立身份与条目。同名键对 frontmatter `name` trim 后大小写折叠，name 缺失或空白时回退安装目录名。详情以只读徽标和逐宿主文本诊断同名共存：Claude Code 的 Personal 同名安装遮蔽 Project，Codex 与 Pi 的同名位置共存为歧义。
 
 **S3 状态收敛**：12 个 Checkout Git State 在检出层逐条呈现，主状态 + 一句人工恢复方向；目录行短语如实并列组合状态（如「1 个可更新 · 1 个需处理」），无聚合假状态；目录按行动优先级静默排序（需要处理 → 可更新 → 尚未检查 → 无需更新 → 仅本地），同档按最严重检出态，无分组标题、无筛选 UI；历史证据不覆盖当前状态。
 

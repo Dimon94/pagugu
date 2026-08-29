@@ -22,3 +22,4 @@
 | 2026-08-27 | 无新增 | — | 本次只落地品牌资产、AppIcon 与主题色，未发现需延后加固的问题。 | repo://Pagugu/Assets.xcassets、repo://Pagugu/Views/DesignTokens.swift | — | — |
 | 2026-08-27 | 无新增 | — | 本次修复暖米白主题全域覆盖，未发现需延后加固的问题。 | repo://Pagugu/Views/ContentView.swift、repo://Pagugu/Views/MenuBarView.swift | — | — |
 | 2026-08-28 | 无新增 | — | 本次为调用面调控设计收敛，只改文档（vision、CONTEXT、ADR-0010、ADR-0011），未触及运行代码，未发现需延后加固的问题。 | repo://docs/product/vision.md、repo://CONTEXT.md、repo://docs/adr/0010-invocation-surface-write-channel-and-host-config-ownership.md、repo://docs/adr/0011-pagugu-owned-pi-extension.md | — | — |
+| 2026-08-30 | 无新增 | — | 本次落地 Pi/共享根发现、三宿主 HostProfile 与同名共存只读诊断，未发现需延后加固的问题。 | repo://Pagugu/HostProfile、repo://Pagugu/AppModel/SkillReadModel.swift、repo://Pagugu/Views/ContentView.swift | — | — |

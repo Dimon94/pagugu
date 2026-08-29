@@ -2,7 +2,7 @@ import Foundation
 
 // L3 COORD: Pagugu/Identity/SkillDirectoryEntry.swift
 // POS: Identity 模块（纯函数，ADR-0009 §2）。owns Skill 目录条目、来源/检出分组、
-//      逐检出 Skill 成员清单、复制投影呈现组与逐 Installation 来源映射投影值类型。
+//      逐检出 Skill 成员清单、复制投影呈现组，以及含 Personal/Project scope 的逐 Installation 来源映射投影值类型。
 //      映射不拥有 Skill Source、Checkout 或 Git 状态事实。
 // TEST: repo://PaguguTests/IdentityTests.swift（分组、指纹与映射投影表测试）。
 
@@ -30,6 +30,8 @@ struct SkillInstallation: Hashable, Sendable {
     /// 该安装完全解析软链接后的绝对路径（呈现组内逐安装保留）。
     let canonicalPath: String
     let hosts: Set<AgentHost>
+    /// 该安装来自 Personal Skill Root 还是 Project Scan Root，供 Host Profile 诊断同名语义。
+    let scope: HostSkillScope
     let projectionType: ProjectionType
     /// 只存在于复制投影；记录仍由 Registry owns。
     let sourceMapping: SourceMappingProjection?

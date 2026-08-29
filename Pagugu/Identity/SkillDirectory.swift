@@ -25,11 +25,12 @@ enum SkillDirectory {
         var byCanonical: [String: (name: String, repositoryRoot: String?, fingerprint: String?, installations: [SkillInstallation])] = [:]
 
         for skill in result.skills {
-            let hosts = HostAttribution.hosts(for: skill.asFoundPath, origin: skill.origin)
+            let scope: HostSkillScope = skill.origin == .personalSkillRoot ? .personal : .project
+            let hosts = HostProfiles.hosts(for: skill.asFoundPath, scope: scope)
             let producesInstallation = skill.origin == .personalSkillRoot || !hosts.isEmpty
             if var existing = byCanonical[skill.canonicalPath] {
                 if producesInstallation {
-                    existing.installations.append(installation(for: skill, hosts: hosts))
+                    existing.installations.append(installation(for: skill, hosts: hosts, scope: scope))
                 }
                 byCanonical[skill.canonicalPath] = existing
             } else {
@@ -37,7 +38,7 @@ enum SkillDirectory {
                     name: skill.name,
                     repositoryRoot: skill.repositoryRootPath,
                     fingerprint: skill.contentFingerprint,
-                    installations: producesInstallation ? [installation(for: skill, hosts: hosts)] : []
+                    installations: producesInstallation ? [installation(for: skill, hosts: hosts, scope: scope)] : []
                 )
             }
         }
@@ -188,12 +189,14 @@ enum SkillDirectory {
 
     private static func installation(
         for skill: DiscoveredSkill,
-        hosts: Set<AgentHost>
+        hosts: Set<AgentHost>,
+        scope: HostSkillScope
     ) -> SkillInstallation {
         SkillInstallation(
             asFoundPath: skill.asFoundPath,
             canonicalPath: skill.canonicalPath,
             hosts: hosts,
+            scope: scope,
             projectionType: projectionType(of: skill),
             sourceMapping: nil
         )
@@ -207,6 +210,7 @@ enum SkillDirectory {
             asFoundPath: installation.asFoundPath,
             canonicalPath: installation.canonicalPath,
             hosts: installation.hosts,
+            scope: installation.scope,
             projectionType: installation.projectionType,
             sourceMapping: sourceMapping
         )

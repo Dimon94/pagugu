@@ -2,8 +2,9 @@ import Foundation
 
 // L3 COORD: Pagugu/AppModel/SkillReadModel.swift
 // POS: AppModel 模块（ADR-0009 §7）。owns Skill Read Model、来源映射投影、Check Run 投影、
-//      目录状态短语与五档排序。
-// TEST: repo://PaguguTests/AppModelTests.swift（投影形状、来源映射、Check Run、目录状态短语与排序表测试）。
+//      同名共存组徽标与逐宿主诊断、目录状态短语与五档排序。
+// TEST: repo://PaguguTests/AppModelTests.swift（投影形状、来源映射、Check Run、目录状态短语与排序表测试）；
+//       repo://PaguguTests/AppModelCollisionTests.swift（同名诊断只读投影、目录名回退与更新资格隔离）。
 
 /// Skill Read Model：AppModel 发布的只读投影，View 只消费不重建。
 struct SkillReadModel: Sendable {
@@ -23,6 +24,8 @@ struct SkillReadModel: Sendable {
     let projectScanRoots: [ProjectScanRoot]
     /// 按 Skill Source Key 保存逐检出卡片；卡片只投影实时事实与纯函数裁决。
     private let checkoutCardsBySource: [SkillSourceKey: [CheckoutCardReadModel]]
+    /// 按 Skill/来源不明条目保存同名共存组徽标与逐宿主诊断。
+    private let nameCollisionsByMemberID: [String: NameCollisionReadModel]
     /// 是否为空态（无任何 Skill 且无 Issue）。
     let isEmpty: Bool
 
@@ -57,6 +60,10 @@ struct SkillReadModel: Sendable {
         self.scanOutcome = scanOutcome
         self.projectScanRoots = projectScanRoots
         self.checkoutCardsBySource = checkoutCardsBySource
+        self.nameCollisionsByMemberID = Self.makeNameCollisionPresentations(
+            sources: sources,
+            unattributedInstallations: unattributedInstallations
+        )
         self.isEmpty = sources.isEmpty && unattributedInstallations.isEmpty && invalidMappings.isEmpty && issues.isEmpty
     }
 
@@ -174,6 +181,72 @@ struct SkillReadModel: Sendable {
     func invalidMapping(for path: String) -> SourceMappingProjection? {
         invalidMappings.first { $0.installationCanonicalPath == path }
     }
+
+    func nameCollision(for identity: SkillIdentity) -> NameCollisionReadModel? {
+        nameCollisionsByMemberID[Self.skillCollisionMemberID(identity)]
+    }
+
+    func nameCollision(forUnattributedInstallationID id: String) -> NameCollisionReadModel? {
+        nameCollisionsByMemberID[Self.unattributedCollisionMemberID(id)]
+    }
+
+    private static func makeNameCollisionPresentations(
+        sources: [SkillSourceItem],
+        unattributedInstallations: [UnattributedInstallationItem]
+    ) -> [String: NameCollisionReadModel] {
+        let skillCandidates = sources.flatMap(\.skills).map { entry in
+            NameCollisionCandidate(
+                id: skillCollisionMemberID(entry.id),
+                frontmatterName: entry.displayName,
+                installationDirectoryName: (entry.canonicalPath as NSString).lastPathComponent,
+                locations: collisionLocations(for: entry.installations)
+            )
+        }
+        let unattributedCandidates = unattributedInstallations.map { item in
+            NameCollisionCandidate(
+                id: unattributedCollisionMemberID(item.id),
+                frontmatterName: item.displayName,
+                installationDirectoryName: (item.canonicalPath as NSString).lastPathComponent,
+                locations: collisionLocations(for: item.installations)
+            )
+        }
+
+        var presentations: [String: NameCollisionReadModel] = [:]
+        for group in NameCollisionEngine.groups(from: skillCandidates + unattributedCandidates) {
+            let presentation = NameCollisionReadModel(
+                badgeText: "同名共存组 · \(group.memberIDs.count)",
+                diagnosticTexts: group.diagnostics.map(\.message)
+            )
+            for memberID in group.memberIDs {
+                presentations[memberID] = presentation
+            }
+        }
+        return presentations
+    }
+
+    private static func collisionLocations(
+        for installations: [SkillInstallation]
+    ) -> Set<HostSkillLocation> {
+        Set(installations.flatMap { installation in
+            installation.hosts.map { host in
+                HostSkillLocation(host: host, scope: installation.scope)
+            }
+        })
+    }
+
+    private static func skillCollisionMemberID(_ identity: SkillIdentity) -> String {
+        "skill\0\(identity.sourceKey.registryValue)\0\(identity.repositoryRelativePath)"
+    }
+
+    private static func unattributedCollisionMemberID(_ id: String) -> String {
+        "unattributed\0\(id)"
+    }
+}
+
+/// 详情页消费的同名共存组只读投影。
+struct NameCollisionReadModel: Equatable, Sendable {
+    let badgeText: String
+    let diagnosticTexts: [String]
 }
 
 /// Skill Read Model 中的一张逐检出卡片。主状态不覆盖正交事实。

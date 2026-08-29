@@ -4,10 +4,12 @@ import Foundation
 // L3 COORD: Pagugu/Discovery/SkillDiscovery.swift
 // POS: Discovery 模块（ADR-0009 §2）。owns Discovery Scan：遍历 Scan Root、发现入口标注、
 //      Project Scan Root denylist 与 10 层深度保险、软链接解析、Canonical Path 去重防环、
-//      SKILL.md 解析校验与原文读取、Git 工作树根检测（.git 存在性）、
+//      SKILL.md 解析校验（name 缺失/空白时回退安装目录名）与原文读取、Git 工作树根检测（.git 存在性）、
 //      复制投影内容指纹（确定性、fail closed）、Scan Issue。
-//      does not own 身份归因与指纹聚合（归 Identity）、Git 子进程（归 Git seam，#19）。
-// TEST: repo://PaguguTests/DiscoveryTests.swift（scratch 扫描测试）。
+//      默认 Personal Skill Root 来自 HostProfile；does not own 宿主归因与冲突诊断、
+//      身份归因与指纹聚合（归 Identity）、Git 子进程（归 Git seam，#19）。
+// TEST: repo://PaguguTests/DiscoveryTests.swift（scratch 扫描与 name 回退测试）；
+//       repo://PaguguTests/DiscoveryPiRootsTests.swift（Pi 与共享 Personal Root）。
 // IN: Personal 与 Project Scan Root 路径列表；OUT: ScanResult（skills + issues + outcome）。
 
 /// Discovery Scan 的产物状态（#3 resolution §8）。
@@ -34,7 +36,7 @@ struct DiscoveredSkill: Sendable, Equatable {
     let asFoundPath: String
     /// 完全解析软链接后的绝对路径（归因与去重用）。
     let canonicalPath: String
-    /// frontmatter `name`（展示元数据，不参与身份）。
+    /// frontmatter `name`；缺失或空白时回退安装目录名（展示元数据，不参与身份）。
     let name: String
     /// 发现入口。Identity 用它区分安装投影与纯来源 Skill。
     let origin: DiscoveryOrigin
@@ -85,11 +87,7 @@ struct ScanResult: Sendable {
 // MARK: - Discovery 扫描入口
 
 enum Discovery {
-    static let personalSkillRoots: [String] = [
-       ("~/.claude/skills" as NSString).expandingTildeInPath,
-       ("~/.agents/skills" as NSString).expandingTildeInPath,
-        ("~/.codex/skills" as NSString).expandingTildeInPath,
-    ]
+    static let personalSkillRoots = HostProfiles.personalSkillRoots()
 
     private static let maximumProjectScanDepth = 10
     private static let projectScanDirectoryDenylist: Set<String> = [
@@ -453,8 +451,9 @@ enum Discovery {
 
     // MARK: - SKILL.md frontmatter 解析
 
-    /// 解析顶层精确 `SKILL.md`：要求 frontmatter 起止分隔符完整，且 `name`、`description` 均非空白。
-    /// 不合格候选由扫描入口记为 Scan Issue，不进入 Skill 列表。展示名取 frontmatter `name`。
+    /// 解析顶层精确 `SKILL.md`：要求 frontmatter 起止分隔符完整且 `description` 非空白。
+    /// 展示名优先取 frontmatter `name`；缺失或空白时回退 as-found 安装目录名。
+    /// 其余不合格候选由扫描入口记为 Scan Issue，不进入 Skill 列表。
     private static func parseSkillMD(
         at path: String,
         asFoundPath: String,
@@ -488,9 +487,10 @@ enum Discovery {
             }
         }
 
+        let installationDirectoryName = (asFoundPath as NSString).lastPathComponent
+        let displayName = name.flatMap { $0.isEmpty ? nil : $0 } ?? installationDirectoryName
         guard hasClosingDelimiter,
-              let resolvedName = name,
-              !resolvedName.isEmpty,
+              !displayName.isEmpty,
               description?.isEmpty == false else {
             return nil
         }
@@ -498,7 +498,7 @@ enum Discovery {
         return DiscoveredSkill(
             asFoundPath: asFoundPath,
             canonicalPath: canonicalPath,
-            name: resolvedName,
+            name: displayName,
             origin: origin
         )
     }

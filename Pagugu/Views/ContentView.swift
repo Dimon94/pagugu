@@ -5,7 +5,8 @@ import UniformTypeIdentifiers
 // POS: 主窗口内容（Variant F 主从结构，#16 落地目录 IA，#20 落地目录状态短语与静默排序，#27 接线 Update Run）。
 //      左侧：平铺目录——来源仓库行（可收起/展开子 Skill 行，默认展开，chevron 独立热区）
 //      + 无仓库可归行（来源不明）；消费 Skill Read Model 给出的逐态短语与五档顺序；无分组标题、无筛选 UI。
-//      右侧：Skill 详情五块（状态与检出、安装位置、来源标识、SKILL.md 原文只读可选中、更新动作）；
+//      右侧：Skill 详情呈现同名共存组徽标与逐宿主诊断，以及状态与检出、安装位置、来源标识、
+//      SKILL.md 原文只读可选中、更新动作；
 //      空选择回欢迎引导。「相关记录」经工具栏「最近活动」承载。
 //      检出卡逐检出提供「更新…」intent（仅 update-available 可用，其余禁用并给出原因）；
 //      确认页列出 Skill Identity、目标检出、branch/upstream、当前 HEAD → 精确 target SHA、behind 数、
@@ -185,6 +186,7 @@ struct ContentView: View {
             if let entry = model.readModel.skillEntry(for: identity) {
                 SkillDetailPanel(
                     entry: entry,
+                    nameCollision: model.readModel.nameCollision(for: entry.id),
                     checkouts: model.readModel.checkoutCards(for: entry.id.sourceKey),
                     markdown: model.skillMarkdown(canonicalPath: entry.canonicalPath),
                     canStartUpdate: model.canStartUpdateRun,
@@ -216,6 +218,7 @@ struct ContentView: View {
             if let item = model.readModel.unattributedItem(for: id) {
                 UnattributedInstallationPanel(
                     item: item,
+                    nameCollision: model.readModel.nameCollision(forUnattributedInstallationID: item.id),
                     markdown: model.skillMarkdown(canonicalPath: item.canonicalPath)
                 )
             } else {
@@ -762,7 +765,7 @@ private struct SkillDirectoryListView: View {
                 ContentUnavailableView(
                     "未发现 Skill",
                     systemImage: "tray",
-                    description: Text("三个 Personal Skill Root 与已保存的 Project Scan Root 下没有可解析的 Skill。")
+                    description: Text("四个 Personal Skill Root 与已保存的 Project Scan Root 下没有可解析的 Skill。")
                 )
             } else {
                 List(selection: $selection) {
@@ -1105,6 +1108,7 @@ private struct SkillSourcePanel: View {
 
 private struct SkillDetailPanel: View {
     let entry: SkillDirectoryEntry
+    let nameCollision: NameCollisionReadModel?
     let checkouts: [CheckoutCardReadModel]
     let markdown: String?
     let canStartUpdate: Bool
@@ -1120,6 +1124,10 @@ private struct SkillDetailPanel: View {
                     Text(entry.displayName)
                         .font(DesignTokens.Fonts.panelTitle)
                     HostLogoSlots(hosts: entry.hosts)
+                }
+
+                if let nameCollision {
+                    NameCollisionBlock(collision: nameCollision)
                 }
 
                 CheckoutStatusBlock(
@@ -1154,6 +1162,36 @@ private struct SkillDetailPanel: View {
             }
             .padding(DesignTokens.Space.section)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+// MARK: - 详情块：同名共存组（只读；不参与身份、归因或更新资格）
+
+private struct NameCollisionBlock: View {
+    let collision: NameCollisionReadModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.block) {
+            HStack(spacing: DesignTokens.Space.inline) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .accessibilityHidden(true)
+                Text(collision.badgeText)
+            }
+            .font(DesignTokens.Fonts.caption)
+            .foregroundStyle(DesignTokens.Status.warning)
+            .padding(.horizontal, DesignTokens.Space.block)
+            .padding(.vertical, DesignTokens.Space.inline)
+            .background(
+                DesignTokens.Surface.bannerTint(DesignTokens.Status.warning),
+                in: Capsule()
+            )
+
+            ForEach(collision.diagnosticTexts, id: \.self) { diagnostic in
+                Text(diagnostic)
+                    .font(DesignTokens.Fonts.rowTitle)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }
@@ -1404,6 +1442,7 @@ private struct CheckoutCard: View {
 
 private struct UnattributedInstallationPanel: View {
     let item: UnattributedInstallationItem
+    let nameCollision: NameCollisionReadModel?
     let markdown: String?
 
     var body: some View {
@@ -1413,6 +1452,10 @@ private struct UnattributedInstallationPanel: View {
                     Text(item.displayName)
                         .font(DesignTokens.Fonts.panelTitle)
                     HostLogoSlots(hosts: item.hosts)
+                }
+
+                if let nameCollision {
+                    NameCollisionBlock(collision: nameCollision)
                 }
 
                 InstallationsBlock(installations: item.installations)
@@ -1733,7 +1776,7 @@ private struct WelcomePanel: View {
                     .font(DesignTokens.Fonts.heading)
             }
         } description: {
-            Text("Pagugu 自动发现三个 Personal Skill Root 下的 Skill。\n从左侧目录选择一个 Skill 查看详情，或添加 Project Scan Root 扩展扫描范围。")
+            Text("Pagugu 自动发现四个 Personal Skill Root 下的 Skill。\n从左侧目录选择一个 Skill 查看详情，或添加 Project Scan Root 扩展扫描范围。")
         } actions: {
             Button("添加 Project Scan Root", systemImage: "folder.badge.plus") {
                 addProjectScanRoot()

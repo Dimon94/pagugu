@@ -41,9 +41,9 @@ Pagugu 把这些关系与规则整理成一个本地、可解释、可安全操�
 
 MVP 1.0 验证“单机安全更新闭环”。用户在一台 Mac 上可以：
 
-1. 发现三个 Personal Skill Root 和明确选择的 Project Scan Root 中的 Skill。
+1. 发现四个 Personal Skill Root 和明确选择的 Project Scan Root 中的 Skill，覆盖 Claude Code、Codex 与 Pi。
 2. 看清 Agent Host、Skill Installation、Skill Source 与 Git 状态的关系。
-3. 维护来源映射，并理解同名异源或来源不明的阻断原因。
+3. 维护来源映射，并理解同名共存的逐宿主诊断与来源不明的阻断原因。
 4. 手动检查更新，对一个 Eligible Update 执行安全 fast-forward。
 5. 在更新被阻止或失败时，看见明确原因和人工恢复动作。
 
@@ -55,11 +55,12 @@ MVP 1.0 使用主窗口承载完整闭环。现有状态栏入口只负责打开
 
 ### 统一发现
 
-- 自动扫描 `~/.claude/skills`、`~/.agents/skills` 与 `~/.codex/skills`。
+- 自动扫描 `~/.claude/skills`、`~/.agents/skills`、`~/.codex/skills` 与 `~/.pi/agent/skills`；Personal `~/.agents/skills` 同时服务 Codex 与 Pi。
 - 递归扫描用户明确选择并保存的 Project Scan Root，发现其中的项目级安装与源码仓库内的 Skill（后者可以没有安装）。
 - 同时覆盖自有 Skill 与第三方开源 Skill。
 - 同一个 Skill 安装到多个 Agent Host 时聚合为一个条目（聚合全部安装位置与宿主槽位）；内容完全一致的复制安装聚合为一个只读「来源不明」呈现组，不做来源推断。
 - 按 Agent Host、Skill Source 和 Skill Installation 展示关系，而不是只列目录名。
+- 同名 Skill 按 trim + 大小写折叠后的 frontmatter `name` 识别（name 缺失或空白时回退安装目录名），保持原有身份与条目，只增加「同名共存组」只读诊断：Claude Code 说明 Personal 遮蔽 Project，Codex 与 Pi 说明同名位置共存可能歧义。
 - 识别真实 `SKILL.md`、frontmatter、软链接和 Git 来源。托管插件的首批范围仍为 Unknown。
 
 ### 状态与详情

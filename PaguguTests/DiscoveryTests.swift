@@ -147,7 +147,7 @@ final class DiscoveryTests: XCTestCase {
 
     // MARK: - 不可解析 SKILL.md = Scan Issue
 
-    func testInvalidFrontmatterCandidatesRecordIssuesAndMakeScanPartial() throws {
+    func testMissingNameFallsBackWhileOtherInvalidFrontmatterRecordsIssues() throws {
         let root = tmp.appendingPathComponent("skills")
         let invalidCandidates = [
             ("missing-opening", "name: missing-opening\ndescription: Test\n---\n"),
@@ -172,9 +172,20 @@ final class DiscoveryTests: XCTestCase {
         }
 
         let result = Discovery.scanPersonalRoots([root.path])
+        let fallbackPaths = Set(["missing-name", "blank-name"].map {
+            root.appendingPathComponent($0).path
+        })
 
-        XCTAssertTrue(result.skills.isEmpty, "不合格的 SKILL.md 不得成为 Skill")
-        XCTAssertEqual(Set(result.issues.map(\.path)), candidatePaths, "每个磁盘候选都应留下 Scan Issue")
+        XCTAssertEqual(
+            Set(result.skills.map(\.name)),
+            ["missing-name", "blank-name"],
+            "name 缺失或空白时使用安装目录名，不丢弃 Skill"
+        )
+        XCTAssertEqual(
+            Set(result.issues.map(\.path)),
+            candidatePaths.subtracting(fallbackPaths),
+            "除允许 name 回退的候选外，其余不合格 SKILL.md 都留下 Scan Issue"
+        )
         XCTAssertTrue(
             result.issues.allSatisfy { !$0.reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
             "Scan Issue 应说明原因"

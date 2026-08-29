@@ -108,42 +108,42 @@ final class IdentityTests: XCTestCase {
     // MARK: - Host Attribution（#3 resolution §6）
 
     func testHostAttributionClaudeCode() {
-        let hosts = HostAttribution.hosts(
+        let hosts = HostProfiles.hosts(
             for: "~/.claude/skills/my-skill",
-            origin: .personalSkillRoot
+            scope: .personal
         )
         XCTAssertEqual(hosts, [.claude])
     }
 
     func testHostAttributionCodex() {
-        let hosts = HostAttribution.hosts(
+        let hosts = HostProfiles.hosts(
             for: "~/.codex/skills/my-skill",
-            origin: .personalSkillRoot
+            scope: .personal
         )
         XCTAssertEqual(hosts, [.codex])
     }
 
-    func testHostAttributionAgentsGoesToCodex() {
-        // .agents/skills → Codex（#3 resolution §6）
-        let hosts = HostAttribution.hosts(
+    func testHostAttributionPersonalAgentsGoesToCodexAndPi() {
+        // Personal .agents/skills 是 Codex 与 Pi 的共享根。
+        let hosts = HostProfiles.hosts(
             for: "~/.agents/skills/my-skill",
-            origin: .personalSkillRoot
+            scope: .personal
         )
-        XCTAssertEqual(hosts, [.codex])
+        XCTAssertEqual(hosts, [.codex, .pi])
     }
 
     func testHostAttributionProjectAgentsGoesToCodex() {
-        let hosts = HostAttribution.hosts(
+        let hosts = HostProfiles.hosts(
             for: "~/Code/repo/.agents/skills/my-skill",
-            origin: .projectScanRoot
+            scope: .project
         )
         XCTAssertEqual(hosts, [.codex])
     }
 
     func testHostAttributionUnknownPathReturnsEmpty() {
-        let hosts = HostAttribution.hosts(
+        let hosts = HostProfiles.hosts(
             for: "~/random/path/skills",
-            origin: .projectScanRoot
+            scope: .project
         )
         XCTAssertTrue(hosts.isEmpty)
     }
