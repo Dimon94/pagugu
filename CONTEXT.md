@@ -5,11 +5,11 @@
 ## 已确认词汇
 
 **Pagugu**
-: 面向 Codex 与 Claude Code 的本地 macOS Agent Skill 管理与安全同步应用。本次仓库只有可运行技术基线，尚未实现扫描和更新。
+: 面向 Codex、Claude Code 与 Pi 的本地 macOS Agent Skill 管理、安全同步与调用面调控应用。当前实现状态以 repo://docs/architecture/current-system-map.md 为准。
 
 **Agent Host**
-: 加载 Skill 的宿主环境。首批宿主为 Codex 与 Claude Code。
-_Avoid_: 把 `.agents`、`.claude` 或 `.codex` 目录本身当成 Agent。
+: 加载 Skill 的宿主环境。首批宿主为 Codex、Claude Code 与 Pi。
+_Avoid_: 把 `.agents`、`.claude`、`.codex` 或 `.pi` 目录本身当成 Agent。
 
 **Skill**
 : Skill Source 内一个仓内路径下的 Skill 内容单元，由 Skill Identity 标识。它是列表的 canonical 条目，聚合自身全部 Skill Installation。在 Project Scan Root 中发现的 Skill 可以没有任何 Skill Installation（仅来源条目）。
@@ -43,7 +43,7 @@ _Avoid_: 用内容哈希或相似度启发式把复制投影归因到 Skill Sour
 _Avoid_: 用 frontmatter `name`、安装目录名或安装位置作去重主键。
 
 **Personal Skill Root**
-: Pagugu 自动发现个人 Skill Installation 的受支持根目录。首批为 `~/.claude/skills`、`~/.agents/skills` 与 `~/.codex/skills`。
+: Pagugu 自动发现个人 Skill Installation 的受支持根目录。首批为 `~/.claude/skills`（Claude Code）、`~/.agents/skills`（Codex 与 Pi 共享）、`~/.codex/skills`（Codex 向后兼容保留）与 `~/.pi/agent/skills`（Pi）。一个根可以服务多个 Agent Host。
 
 **Project Scan Root**
 : 用户明确选择并保存的项目父目录。Pagugu 只在这些目录内递归发现任意含 SKILL.md 的目录，不遍历整个 Home。保存时校验：不得为文件系统根、Home 目录、Personal Skill Root 本身或其祖先。
@@ -113,9 +113,35 @@ _Avoid_: 记录派生状态变化或原始命令输出；可改写历史。
 **Skill Read Model**
 : Pagugu 从 Skill Source、Skill Installation 与 Git 状态生成的只读 UI 投影。可更新性在 Skill Source Checkout 层逐检出裁决，Skill Installation 层只有归因状态。它不能反向成为第二真相。
 
+**同名共存组（Name Collision Group）**
+: 按归一化 frontmatter `name`（trim 并大小写折叠；缺失或无效时回退安装目录名）聚合的展示与诊断分组。它与 Skill Identity 正交，不参与身份判定。
+_Avoid_: 用同名共存组做去重主键或归因依据。
+
+**调用面（Invocation Surface）**
+: 一个 Skill 对一个 Agent Host 的可见与可调用关系总和，由隐式曝光与显式调用两面构成。
+
+**隐式曝光（Implicit Exposure）**
+: Agent Host 把 Skill 的 name/description 注入模型上下文，模型可自主决定调用。
+
+**显式调用（Explicit Invocation）**
+: 人通过 `/name`、`$name` 等入口主动触发 Skill，不依赖模型自主决策。
+
+**调用面档位（Exposure Level）**
+: 调用面的离散状态：完全暴露、降级曝光（name-only）、仅显式、全禁用。各 Agent Host 支持的档位集合不同；不支持的档位如实呈现为缺口，不静默降级。
+_Avoid_: 用宿主不支持的名义档位冒充实际生效档位。
+
+**宿主规则档案（Host Profile）**
+: 单个 Agent Host 的 Skill 规则内化：发现根集合、同名共存语义（遮蔽或歧义共存）、调用面控制通道与配置 schema。规则逐宿主参数化。
+_Avoid_: 把某一宿主的规则当作所有宿主的默认。
+
+**可见性主张（Visibility Claim）**
+: 用户对「Skill × Agent Host × 调用面档位」的主张。Agent Host 配置文件的事实优先：主张与事实分歧时呈现不覆盖，恢复只能由用户显式触发；失效语义复用失效映射（标注保留、不静默删除）。
+
 ## 仍为 Unknown
 
 - 托管插件来源的首批支持范围。
 - 签名、公证与 GitHub Releases 发布流程。
 - 专业商标可用性。
-- 各 Agent Host 对 skills 目录的精确加载规则（递归深度、隐藏目录、无效 frontmatter 容错）官方未完整写明；Codex 是否读取项目内 `.codex/skills` 未知。
+- Codex 的「仅显式」通道（`allow_implicit_invocation`）文档与 issue 相互矛盾，是否存在待核实。
+- Pi 侧「全禁用」档位待验证：Pagugu 自带扩展能否连显式 `/skill:name` 也移除。
+- Claude Code 与 Codex 的调用面配置 schema（`skillOverrides`、`[[skills.config]]`）当前来自搜索合成，写入通道实现前需对官方文档原文核实。

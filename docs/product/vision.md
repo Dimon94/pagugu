@@ -6,7 +6,7 @@ Status: confirmed product intent
 
 ## 为何存在
 
-Codex 与 Claude Code 会从个人目录、项目目录和托管插件加载 Skill。用户同时使用多个 Agent Host、多个项目和多台 Mac 后，需要手工判断以下信息：
+Codex、Claude Code 与 Pi 等 Agent Host 会从个人目录、项目目录和托管插件加载 Skill。用户同时使用多个 Agent Host、多个项目和多台 Mac 后，需要手工判断以下信息：
 
 - 系统里安装了哪些 Skill。
 - 同一个 Skill 被哪些 Agent Host 使用。
@@ -15,11 +15,13 @@ Codex 与 Claude Code 会从个人目录、项目目录和托管插件加载 Ski
 
 这些关系分散在 `.claude`、`.agents`、`.codex`、软链接和 Git 仓库中。直接覆盖安装目录可能破坏本地修改、来源所有权或同名异源内容。
 
-Pagugu 把这些关系整理成一个本地、可解释、可安全操作的 macOS 产品。
+各 Agent Host 围绕 Skill 的可见性与调用规则同样各自为政：同名 precedence、隐式曝光开关与禁用机制分散在宿主配置、SKILL.md frontmatter 和第三方扩展中，能力与语义逐宿主不同。
+
+Pagugu 把这些关系与规则整理成一个本地、可解释、可安全操作的 macOS 产品。
 
 ## 目标用户
 
-首位目标用户是同时使用 Codex 与 Claude Code，并维护自有及第三方 Skill 的个人开发者。用户希望在多台电脑间保持 Skill 最新，但不愿逐个目录和仓库执行检查。
+首位目标用户是同时使用 Codex、Claude Code 与 Pi，并维护自有及第三方 Skill 的个人开发者。用户希望在多台电脑间保持 Skill 最新，但不愿逐个目录和仓库执行检查。
 
 未来可服务具有相同工作方式的 Agent Skill 重度用户。团队协作、云端账户和集中式 Skill 托管不属于当前产品方向。
 
@@ -76,6 +78,14 @@ MVP 1.0 使用主窗口承载完整闭环。现有状态栏入口只负责打开
 - 脏仓库、分叉、无远程、来源不明或同名异源时，Pagugu 阻止更新并解释恢复动作。
 - “一键”表示减少重复操作，不表示跳过安全检查。
 
+### 调用面调控
+
+- Pagugu 内化各 Agent Host 的 Skill 加载与可见性规则（宿主规则档案），以统一的可视化方式呈现并调控每个 Skill 对每个宿主的调用面档位：完全暴露、降级曝光（name-only）、仅显式、全禁用。
+- 同名共存组如实呈现，并按宿主语义解释（遮蔽或歧义共存）；它不参与 Skill 身份判定。
+- 调控只写 Agent Host 配置或 Pagugu 独占文件，永不写 SKILL.md 等 Skill 内容。
+- Agent Host 配置文件的事实优先：主张与事实分歧时呈现不覆盖，恢复由用户显式触发。
+- 宿主不支持的档位如实呈现为缺口，不静默降级。
+
 ### 主动提醒
 
 - Pagugu 每日执行本地检查。
@@ -114,7 +124,7 @@ MVP 1.0 使用主窗口承载完整闭环。现有状态栏入口只负责打开
 
 ## 明确边界
 
-Pagugu 不替代 Codex、Claude Code 或 Git。它不遍历整个 Home，不托管 Skill 内容，不覆盖来源不明的安装目录，也不以 UI、缓存、日志或 App Registry 作为 Skill 内容真相。
+Pagugu 不替代 Codex、Claude Code 或 Git。它不遍历整个 Home，不托管 Skill 内容，不写 SKILL.md 等 Skill 内容，不覆盖来源不明的安装目录，也不以 UI、缓存、日志或 App Registry 作为 Skill 内容真相。
 
 ## PROTOCOL
 
