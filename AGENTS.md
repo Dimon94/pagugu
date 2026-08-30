@@ -5,7 +5,7 @@
 </identity>
 
 <response_style>
-会话回复的塑形规则。
+会话回复的塑形规则（产品文案归 repo://docs/agents/writing-standards.md）。
 首行给答案、命令或文件坐标；背景在后或省略。
 多步骤任务用编号列表，每步一个有界动作。
 存在用户侧遗留项时，结尾点名一个下一步；agent 能做的直接做完，不推给用户。
@@ -79,6 +79,7 @@ main 只接收已验证提交；票收口即删树删分支。
 
 <code_style>
 代码规范见 repo://docs/agents/coding-standards.md。触发：新增或修改代码、注释或公开 API 文档。完成：当前 diff 命中的规则已逐项检查。
+用户可见文案与文档写作规范见 repo://docs/agents/writing-standards.md。触发：新增或修改 CLI/诊断输出、错误信息、README/docs、生成交付物，或行为变更后的文案清扫。
 局部 AGENTS.md、accepted ADR、外部合同和运行证据优先于通用规范。
 规范只约束当前变更和阻断当前正确性的既有问题。
 </code_style>
