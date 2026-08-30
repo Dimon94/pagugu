@@ -40,5 +40,6 @@ Pagugu 分发并维护自己的 Pi 扩展（安装到 `~/.pi/agent/extensions/` 
 
 - 本 ADR 冻结：自带扩展复刻 hiddenSkills、配置为 Pagugu 独占文件且文件即主张、不写 SKILL.md、不复刻无关能力。
 - 不裁决：扩展实现细节与升级通道（默认假设随 App 更新重装，归实现票）。
-- 开工第一个 spike：验证 `systemPromptOptions` 能否移除 skill 条目，以及能否阻断 `/skill:name` 显式调用（决定 Pi 是否支持「全禁用」档，当前 Unknown）。
+- 实现前 spike 已验证 `before_agent_start` 可从 system prompt 移除 Skill 条目，`input` 可阻断 `/skill:name` 显式调用；因此 Pi 支持「完全暴露 / 仅显式 / 全禁用」三档，只不支持「降级曝光」。
+- #56 前的顶层 `skills` JSON 只读占位没有生产 writer、公开分发或 canonical 用户状态；实现采用 `hiddenSkills` / `disabledSkills` clean-break，旧占位明确读取失败，不增加双 schema 迁移路径。
 - 未来 Pi 原生提供设置级可见性控制时，自带扩展退役为只读适配，立新 ADR supersede 本记录。

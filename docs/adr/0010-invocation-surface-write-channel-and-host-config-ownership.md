@@ -26,7 +26,7 @@ Pagugu 只增删自己负责的 key（如 `skillOverrides` 中由 Pagugu 写入�
 
 ### 4. 能力缺口 fail closed
 
-宿主不支持某调用面档位时，该档写入口禁用并标注原因（如 Codex 与 Pi 不支持「降级曝光」）；Registry mutation 与 v2 schema 校验也拒绝不受支持的主张，绝不静默降级为其他档位（如用「全禁用」冒充「仅显式」）。当前 Host Profile：Claude Code 支持四档；Codex 支持完全暴露、仅显式、全禁用；Pi 支持完全暴露、仅显式，且「全禁用」在 ADR-0011 的 spike 完成前保持 Unknown/Unsupported。
+宿主不支持某调用面档位时，该档写入口禁用并标注原因（如 Codex 与 Pi 不支持「降级曝光」）；Registry mutation 与 v2 schema 校验也拒绝不受支持的主张，绝不静默降级为其他档位（如用「全禁用」冒充「仅显式」）。当前 Host Profile：Claude Code 支持四档；Codex 支持完全暴露、仅显式、全禁用；ADR-0011 spike 已验证 Pi 扩展可阻断显式调用，因此 Pi 支持完全暴露、仅显式、全禁用，只不支持降级曝光。
 
 ### 5. 可见性主张是 App Registry 的第四类 owns
 

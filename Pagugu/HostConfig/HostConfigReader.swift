@@ -83,10 +83,6 @@ struct HostConfigReader: Sendable {
         let skillOverrides: [String: ClaudeOverride]?
     }
 
-    private struct PiVisibilityDocument: Decodable {
-        let skills: [String: ExposureLevel]
-    }
-
     let homeDirectory: URL
 
     init(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) {
@@ -251,8 +247,9 @@ struct HostConfigReader: Sendable {
         let url = homeDirectory.appendingPathComponent(".pi/agent/pagugu/visibility.json")
         guard let data = try readExistingFile(at: url) else { return .fullyExposed }
         do {
-            return try JSONDecoder().decode(PiVisibilityDocument.self, from: data).skills[skillName]
-                ?? .fullyExposed
+            let document = try JSONDecoder().decode(PiVisibilityDocument.self, from: data)
+            guard document.isValid else { throw ReadError.invalidDocument }
+            return document.exposureLevel(for: skillName)
         } catch {
             throw ReadError.invalidDocument
         }

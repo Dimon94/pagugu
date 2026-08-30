@@ -51,7 +51,7 @@ final class AppModelSurfaceTests: XCTestCase {
             to: homeDirectory.appendingPathComponent(".codex/config.toml")
         )
         try write(
-            #"{"skills":{"helper":"fullyDisabled"}}"#,
+            #"{"hiddenSkills":[],"disabledSkills":["helper"]}"#,
             to: homeDirectory.appendingPathComponent(".pi/agent/pagugu/visibility.json")
         )
 
@@ -71,7 +71,7 @@ final class AppModelSurfaceTests: XCTestCase {
         XCTAssertEqual(surfaces.map(\.host), [.claude, .codex, .pi])
         XCTAssertEqual(surface(for: .claude, in: surfaces).state, .level(.explicitOnly))
         XCTAssertEqual(surface(for: .codex, in: surfaces).state, .level(.fullyDisabled))
-        XCTAssertEqual(surface(for: .pi, in: surfaces).state, .unsupported(.fullyDisabled))
+        XCTAssertEqual(surface(for: .pi, in: surfaces).state, .level(.fullyDisabled))
 
         try write(
             #"{"skillOverrides":{"helper":"off"}}"#,

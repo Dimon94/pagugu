@@ -46,7 +46,7 @@ final class HostConfigReaderTests: XCTestCase {
             to: homeDirectory.appendingPathComponent(".codex/agents/openai.yaml")
         )
         try write(
-            #"{"skills":{"helper":"explicitOnly"}}"#,
+            #"{"hiddenSkills":["helper"],"disabledSkills":[]}"#,
             to: homeDirectory.appendingPathComponent(".pi/agent/pagugu/visibility.json")
         )
 
@@ -65,7 +65,7 @@ final class HostConfigReaderTests: XCTestCase {
         XCTAssertEqual(surface(for: .pi, in: surfaces).state, .level(.explicitOnly))
         XCTAssertTrue(surface(for: .claude, in: surfaces).unsupportedLevels.isEmpty)
         XCTAssertEqual(surface(for: .codex, in: surfaces).unsupportedLevels, [.nameOnly])
-        XCTAssertEqual(surface(for: .pi, in: surfaces).unsupportedLevels, [.nameOnly, .fullyDisabled])
+        XCTAssertEqual(surface(for: .pi, in: surfaces).unsupportedLevels, [.nameOnly])
 
         let yamlOnly = reader.invocationSurfaces(
             skillName: "yaml-only",
@@ -78,16 +78,6 @@ final class HostConfigReaderTests: XCTestCase {
             ]
         )
         XCTAssertEqual(surface(for: .codex, in: yamlOnly).state, .level(.explicitOnly))
-
-        try write(
-            #"{"skills":{"helper":"nameOnly"}}"#,
-            to: homeDirectory.appendingPathComponent(".pi/agent/pagugu/visibility.json")
-        )
-        let unsupported = reader.invocationSurfaces(
-            skillName: "helper",
-            installations: [installation(path: piSkill, host: .pi, scope: .personal)]
-        )
-        XCTAssertEqual(surface(for: .pi, in: unsupported).state, .unsupported(.nameOnly))
     }
 
     func testClaudeProjectOverridesUserAndMultipleContextsUseMostRestrictiveLevel() throws {
@@ -159,7 +149,7 @@ final class HostConfigReaderTests: XCTestCase {
             to: homeDirectory.appendingPathComponent(".codex/agents/openai.yaml")
         )
         try write(
-            #"{"skills":{"helper":1}}"#,
+            #"{"hiddenSkills":["helper"],"disabledSkills":["helper"]}"#,
             to: homeDirectory.appendingPathComponent(".pi/agent/pagugu/visibility.json")
         )
 
@@ -184,10 +174,24 @@ final class HostConfigReaderTests: XCTestCase {
         )
     }
 
+    func testLegacyReadOnlyPiPlaceholderSchemaIsRejectedByCleanBreak() throws {
+        let piSkill = homeDirectory.appendingPathComponent(".pi/agent/skills/helper")
+        try write(
+            #"{"skills":{"helper":"explicitOnly"}}"#,
+            to: homeDirectory.appendingPathComponent(".pi/agent/pagugu/visibility.json")
+        )
+        let surfaces = HostConfigReader(homeDirectory: homeDirectory).invocationSurfaces(
+            skillName: "helper",
+            installations: [installation(path: piSkill, host: .pi, scope: .personal)]
+        )
+
+        XCTAssertEqual(surface(for: .pi, in: surfaces).state, .readFailed)
+    }
+
     func testInaccessibleExistingConfigIsReadFailure() throws {
         let piSkill = homeDirectory.appendingPathComponent(".pi/agent/skills/helper")
         let piURL = homeDirectory.appendingPathComponent(".pi/agent/pagugu/visibility.json")
-        try write(#"{"skills":{}}"#, to: piURL)
+        try write(#"{"hiddenSkills":[],"disabledSkills":[]}"#, to: piURL)
         let piDirectoryURL = piURL.deletingLastPathComponent()
         try fileManager.setAttributes([.posixPermissions: 0o000], ofItemAtPath: piDirectoryURL.path)
         defer {

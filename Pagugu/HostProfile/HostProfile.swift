@@ -104,7 +104,7 @@ enum HostProfiles {
         personalRootRelativePaths: [".pi/agent/skills", ".agents/skills"],
         projectRootRelativePaths: [],
         nameCollisionRule: .ambiguousCoexistence,
-        supportedExposureLevels: [.fullyExposed, .explicitOnly]
+        supportedExposureLevels: [.fullyExposed, .explicitOnly, .fullyDisabled]
     )
 
     static let all: [HostProfile] = [claudeCode, codex, pi]

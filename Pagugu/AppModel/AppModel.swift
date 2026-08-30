@@ -4,7 +4,8 @@ import Foundation
 // OUTPUT: AppModel UI intent/只读投影，以及只供 composition root 注入的 RegistryResetting reset seam。
 // POS: AppModel 模块（ADR-0009 §7）。@MainActor composition root：
 //      owns Skill Read Model、受限恢复/来源映射/调用面动作错误投影、Claude Code/Codex 主张动作顺序编排、
-//      目录收起、Check/Update 瞬态、全部 UI intent 与启动/刷新编排；每次发布重读 HostConfig 调用面事实，
+//      Pi 扩展健康/安装升级与三档独占配置写入编排、reload 提示、目录收起、Check/Update 瞬态、
+//      全部 UI intent 与启动/刷新编排；每次发布重读 HostConfig 调用面事实，
 //      合并 Registry Claim 派生分歧，并按实时 Git 事实重推导观察 freshness。
 //      取消确认或更新失败后，目标检出
 //      在新的成功检查前不再消费旧观察。审计历史投影只服务「最近活动」呈现；
@@ -15,7 +16,8 @@ import Foundation
 // TEST: repo://PaguguTests/AppModelTests.swift（Registry gate、requestQuit 退出 intent、Project Scan Root intent、
 //      目录投影与 intent 路由 smoke、审计呈现投影）；repo://PaguguTests/AppModelSurfaceTests.swift（调用面事实）；
 //      repo://PaguguTests/AppModelClaudeConflictTests.swift（Claude 主张与冲突解决）；
-//      repo://PaguguTests/AppModelCodexTests.swift（Codex 三档、分歧解决、恢复与失败）。
+//      repo://PaguguTests/AppModelCodexTests.swift（Codex 三档、分歧解决、恢复与失败）；
+//      repo://PaguguTests/PiExtensionHealthTests.swift（Pi 扩展 fail-closed、修复、档位写入与 reload 提示）。
 
 enum AppRun: Equatable, Sendable {
     case check
@@ -65,6 +67,11 @@ enum VisibilityClaimActionError: Equatable, Sendable {
     case claimUnavailable
     case registry(VisibilityClaimError)
     case hostConfiguration(HostConfigWriterError)
+    case piSkillUnavailable
+    case ambiguousPiSkillName
+    case piExtensionUnavailable(PiExtensionHealth)
+    case piExtension(PiExtensionManagerError)
+    case piVisibility(PiVisibilityWriterError)
 
     var reason: String {
         switch self {
@@ -78,6 +85,16 @@ enum VisibilityClaimActionError: Equatable, Sendable {
             return error.reason
         case .hostConfiguration(let error):
             return "Agent Host 配置写入失败。\(error.recoverySuggestion)"
+        case .piSkillUnavailable:
+            return "该 Skill 已不在当前 Pi 投影中。请重新扫描后再试。"
+        case .ambiguousPiSkillName:
+            return "存在多个同名 Pi Skill，无法把单个身份档位安全写入共享名称配置。请先消除同名冲突。"
+        case .piExtensionUnavailable(let health):
+            return health.recoverySuggestion ?? "Pi 扩展不可用。请安装/更新后重试。"
+        case .piExtension(let error):
+            return "Pi 扩展安装或更新失败。\(error.recoverySuggestion)"
+        case .piVisibility(let error):
+            return "Pi 可见性配置写入失败。\(error.recoverySuggestion)"
         }
     }
 }
@@ -102,6 +119,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var checkRunSummary: CheckRunSummary?
     @Published private(set) var sourceMappingError: SourceMappingError?
     @Published private(set) var visibilityClaimError: VisibilityClaimActionError?
+    @Published private(set) var piExtensionHealth: PiExtensionHealth
+    @Published private(set) var piReloadRequired = false
     @Published private(set) var pendingUpdatePlan: UpdatePlan?
     @Published private(set) var activeRun: AppRun?
     @Published private(set) var updateResult: UpdateResult?
@@ -123,6 +142,8 @@ final class AppModel: ObservableObject {
     private let hostConfigReader: HostConfigReader
     private let claudeConfigWriter: ClaudeConfigWriter
     private let codexConfigWriter: CodexConfigWriter
+    private let piVisibilityWriter: PiVisibilityWriter
+    private let piExtensionManager: PiExtensionManager
     private let gitInspector: any GitInspecting
     private let gitExecutor: any GitExecuting
     private let terminateApplication: () -> Void
@@ -140,6 +161,8 @@ final class AppModel: ObservableObject {
         hostConfigReader: HostConfigReader = HostConfigReader(),
         claudeConfigWriter: ClaudeConfigWriter = ClaudeConfigWriter(),
         codexConfigWriter: CodexConfigWriter = CodexConfigWriter(),
+        piVisibilityWriter: PiVisibilityWriter = PiVisibilityWriter(),
+        piExtensionManager: PiExtensionManager = PiExtensionManager(),
         registryResetter: (any RegistryResetting)? = nil,
         terminateApplication: @escaping () -> Void = {}
     ) {
@@ -151,6 +174,9 @@ final class AppModel: ObservableObject {
         self.hostConfigReader = hostConfigReader
         self.claudeConfigWriter = claudeConfigWriter
         self.codexConfigWriter = codexConfigWriter
+        self.piVisibilityWriter = piVisibilityWriter
+        self.piExtensionManager = piExtensionManager
+        self.piExtensionHealth = piExtensionManager.health()
         self.gitInspector = gitInspector
         self.gitExecutor = gitExecutor
         self.terminateApplication = terminateApplication
@@ -177,6 +203,7 @@ final class AppModel: ObservableObject {
     }
 
     private func publishDiscovery(updateRunFacts: CheckoutGitFacts? = nil) async {
+        piExtensionHealth = piExtensionManager.health()
         let projectScanRoots = await registry.projectScanRoots()
         let scanResult = Discovery.scanAll(
             personalRoots: personalRoots,
@@ -488,6 +515,75 @@ final class AppModel: ObservableObject {
             await publishDiscovery()
             return false
         }
+    }
+
+    // L4 IN: Skill Identity 必须来自当前 Read Model、已安装到 Pi、名称键唯一，且扩展健康。
+    // OUT: 原子写 Pi 独占 visibility.json；文件本身是主张，不创建 Registry Claim；成功后提示 /reload。
+    // FAIL: 扩展缺失/不兼容、同名歧义或配置损坏均零写入并给出修复方向。
+    func setPiExposureLevel(
+        _ exposureLevel: ExposureLevel,
+        for skillIdentity: SkillIdentity
+    ) async -> Bool {
+        guard let entry = hostSkillEntry(for: skillIdentity, host: .pi) else {
+            visibilityClaimError = .piSkillUnavailable
+            return false
+        }
+        guard !hasConfigurationKeyCollision(for: entry, host: .pi) else {
+            visibilityClaimError = .ambiguousPiSkillName
+            return false
+        }
+        piExtensionHealth = piExtensionManager.health()
+        guard piExtensionHealth.allowsVisibilityWrites else {
+            visibilityClaimError = .piExtensionUnavailable(piExtensionHealth)
+            return false
+        }
+        do {
+            try piVisibilityWriter.apply(
+                exposureLevel: exposureLevel,
+                forSkillNamed: entry.displayName
+            )
+            visibilityClaimError = nil
+            piReloadRequired = true
+            await publishDiscovery()
+            return true
+        } catch let error as PiVisibilityWriterError {
+            visibilityClaimError = .piVisibility(error)
+            await publishDiscovery()
+            return false
+        } catch {
+            visibilityClaimError = .piVisibility(.fileOperationFailed)
+            await publishDiscovery()
+            return false
+        }
+    }
+
+    /// 幂等安装或升级 Pagugu 自带 Pi 扩展；不自动触发 Pi reload。
+    func installOrUpdatePiExtension() async -> Bool {
+        do {
+            let changed = try piExtensionManager.installOrUpdate()
+            piExtensionHealth = piExtensionManager.health()
+            guard piExtensionHealth.allowsVisibilityWrites else {
+                visibilityClaimError = .piExtensionUnavailable(piExtensionHealth)
+                return false
+            }
+            visibilityClaimError = nil
+            if changed { piReloadRequired = true }
+            return true
+        } catch let error as PiExtensionManagerError {
+            piExtensionHealth = piExtensionManager.health()
+            visibilityClaimError = .piExtension(error)
+            return false
+        } catch {
+            piExtensionHealth = piExtensionManager.health()
+            visibilityClaimError = .piExtension(.fileOperationFailed)
+            return false
+        }
+    }
+
+    var canWritePiVisibility: Bool { piExtensionHealth.allowsVisibilityWrites }
+
+    func dismissPiReloadReminder() {
+        piReloadRequired = false
     }
 
     func clearVisibilityClaimError() {

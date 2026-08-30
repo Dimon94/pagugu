@@ -7,13 +7,14 @@ import UniformTypeIdentifiers
 //      + 无仓库可归行（来源不明）；消费 Skill Read Model 给出的逐态短语与五档顺序；无分组标题、无筛选 UI。
 //      右侧：Skill 详情呈现同名共存组徽标与逐宿主诊断、调用面实时档位与 Unsupported 缺口；
 //      Claude Code 行提供四档、Codex 行提供三档主张切换；两者共用分歧解决与逐宿主单槽恢复；
+//      Pi 行提供三档切换、扩展修复入口与 reload 提示；
 //      Unsupported segment 禁用；Codex 用户级「仅显式」标明会影响全部 Codex Skill；并呈现状态与检出、安装位置、来源标识、
 //      SKILL.md 原文只读可选中、更新动作；
 //      空选择回欢迎引导。「相关记录」经工具栏「最近活动」承载。
 //      检出卡逐检出提供「更新…」intent（仅 update-available 可用，其余禁用并给出原因）；
 //      确认页列出 Skill Identity、目标检出、branch/upstream、当前 HEAD → 精确 target SHA、behind 数、
 //      影响范围声明与「同一仓库的 N 个 Skill 将一起前进」名单；多 Eligible 检出当次选择不持久化。
-//      结果区统一承载六类反馈（成功、noop、取消后果、写失败、刷新失败、检查总结），信息/警示分级、可关闭。
+//      结果区统一承载运行反馈、调用面失败与 Pi reload 提示，信息/警示分级、可关闭。
 //      工具栏提供全量手动检查、扫描范围管理与「最近活动」三语义面（摘要、详情、清空确认；
 //      详情标注「当时记录」，失败无 stderr/命令复制/重试，只导航相关 Skill；损坏呈现「历史不可用」）；
 //      Registry 故障由全窗口门面接管，重置后呈现 quarantine 备份路径横幅；
@@ -25,6 +26,7 @@ import UniformTypeIdentifiers
 //       repo://PaguguTests/AppModelSurfaceTests.swift（调用面事实投影）；
 //       repo://PaguguTests/AppModelClaudeConflictTests.swift（Claude 主张、分歧与动作结果）；
 //       repo://PaguguTests/AppModelCodexTests.swift（Codex 三档、Unsupported、分歧与动作结果）；
+//       repo://PaguguTests/PiExtensionHealthTests.swift（Pi 扩展健康、修复与档位 intent）；
 //       repo://PaguguTests/PaguguTests.swift（ContentView 构造、确认页完整 SHA、DesignTokens、受限恢复退出不直接 terminate）。
 
 struct ContentView: View {
@@ -193,6 +195,7 @@ struct ContentView: View {
                     entry: entry,
                     nameCollision: model.readModel.nameCollision(for: entry.id),
                     invocationSurfaces: model.readModel.invocationSurfaces(for: entry.id),
+                    piExtensionHealth: model.piExtensionHealth,
                     checkouts: model.readModel.checkoutCards(for: entry.id.sourceKey),
                     markdown: model.skillMarkdown(canonicalPath: entry.canonicalPath),
                     canStartUpdate: model.canStartUpdateRun,
@@ -207,6 +210,12 @@ struct ContentView: View {
                     },
                     setExposureLevel: { host, level in
                         _ = await model.setExposureLevel(level, for: entry.id, host: host)
+                    },
+                    setPiExposureLevel: { level in
+                        _ = await model.setPiExposureLevel(level, for: entry.id)
+                    },
+                    installOrUpdatePiExtension: {
+                        _ = await model.installOrUpdatePiExtension()
                     },
                     reapplyClaim: { host in
                         _ = await model.reapplyVisibilityClaim(for: entry.id, host: host)
@@ -266,6 +275,7 @@ private struct ResultAreaView: View {
     private var hasBanner: Bool {
         model.registryResetBackupPath != nil || model.checkRunProgress != nil
             || model.checkRunSummary != nil || model.updateResult != nil
+            || model.piReloadRequired
             || model.updateRefreshFailure != nil || model.projectScanRootError != nil
             || model.sourceMappingError != nil || model.visibilityClaimError != nil
     }
@@ -289,6 +299,14 @@ private struct ResultAreaView: View {
                     icon: "checkmark.circle",
                     text: "Registry 已重置为空。原文件备份在：\(backupPath)",
                     onDismiss: { model.dismissRegistryResetBackupPath() }
+                )
+            }
+            if model.piReloadRequired {
+                ResultBanner(
+                    level: .warning,
+                    icon: "arrow.clockwise",
+                    text: "Pi 配置已更新。请在 Pi 中运行 /reload 或重启 Pi 后生效。",
+                    onDismiss: { model.dismissPiReloadReminder() }
                 )
             }
             if let progress = model.checkRunProgress {
@@ -1139,6 +1157,7 @@ private struct SkillDetailPanel: View {
     let entry: SkillDirectoryEntry
     let nameCollision: NameCollisionReadModel?
     let invocationSurfaces: [HostInvocationSurface]
+    let piExtensionHealth: PiExtensionHealth
     let checkouts: [CheckoutCardReadModel]
     let markdown: String?
     let canStartUpdate: Bool
@@ -1146,6 +1165,8 @@ private struct SkillDetailPanel: View {
     let isPreparingUpdate: Bool
     let startUpdate: (String?) -> Void
     let setExposureLevel: (AgentHost, ExposureLevel) async -> Void
+    let setPiExposureLevel: (ExposureLevel) async -> Void
+    let installOrUpdatePiExtension: () async -> Void
     let reapplyClaim: (AgentHost) async -> Void
     let adoptDiskConfiguration: (AgentHost) async -> Void
     let restoreConfiguration: (AgentHost) async -> Void
@@ -1166,7 +1187,10 @@ private struct SkillDetailPanel: View {
 
                 InvocationSurfaceBlock(
                     surfaces: invocationSurfaces,
+                    piExtensionHealth: piExtensionHealth,
                     setExposureLevel: setExposureLevel,
+                    setPiExposureLevel: setPiExposureLevel,
+                    installOrUpdatePiExtension: installOrUpdatePiExtension,
                     reapplyClaim: reapplyClaim,
                     adoptDiskConfiguration: adoptDiskConfiguration,
                     restoreConfiguration: restoreConfiguration
@@ -1242,21 +1266,31 @@ private struct NameCollisionBlock: View {
 
 private struct InvocationSurfaceBlock: View {
     let surfaces: [HostInvocationSurface]
+    let piExtensionHealth: PiExtensionHealth?
     let setExposureLevel: ((AgentHost, ExposureLevel) async -> Void)?
+    let setPiExposureLevel: ((ExposureLevel) async -> Void)?
+    let installOrUpdatePiExtension: (() async -> Void)?
     let reapplyClaim: ((AgentHost) async -> Void)?
     let adoptDiskConfiguration: ((AgentHost) async -> Void)?
     let restoreConfiguration: ((AgentHost) async -> Void)?
     @State private var isApplyingChange = false
+    @State private var isApplyingPiChange = false
 
     init(
         surfaces: [HostInvocationSurface],
+        piExtensionHealth: PiExtensionHealth? = nil,
         setExposureLevel: ((AgentHost, ExposureLevel) async -> Void)? = nil,
+        setPiExposureLevel: ((ExposureLevel) async -> Void)? = nil,
+        installOrUpdatePiExtension: (() async -> Void)? = nil,
         reapplyClaim: ((AgentHost) async -> Void)? = nil,
         adoptDiskConfiguration: ((AgentHost) async -> Void)? = nil,
         restoreConfiguration: ((AgentHost) async -> Void)? = nil
     ) {
         self.surfaces = surfaces
+        self.piExtensionHealth = piExtensionHealth
         self.setExposureLevel = setExposureLevel
+        self.setPiExposureLevel = setPiExposureLevel
+        self.installOrUpdatePiExtension = installOrUpdatePiExtension
         self.reapplyClaim = reapplyClaim
         self.adoptDiskConfiguration = adoptDiskConfiguration
         self.restoreConfiguration = restoreConfiguration
@@ -1289,6 +1323,10 @@ private struct InvocationSurfaceBlock: View {
                             .font(DesignTokens.Fonts.caption)
                             .foregroundStyle(DesignTokens.Status.neutral)
                             .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if surface.host == .pi, setPiExposureLevel != nil,
+                       let piExtensionHealth {
+                        piControls(for: surface, health: piExtensionHealth)
                     }
                     if !surface.unsupportedLevels.isEmpty {
                         Text("档位缺口：" + surface.unsupportedLevels
@@ -1381,6 +1419,70 @@ private struct InvocationSurfaceBlock: View {
         }
     }
 
+    @ViewBuilder
+    private func piControls(
+        for surface: HostInvocationSurface,
+        health: PiExtensionHealth
+    ) -> some View {
+        if let recoverySuggestion = health.recoverySuggestion {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.inline) {
+                Label("Pi 扩展需要修复", systemImage: "exclamationmark.triangle.fill")
+                    .font(DesignTokens.Fonts.rowTitle)
+                    .foregroundStyle(DesignTokens.Status.warning)
+                Text(recoverySuggestion)
+                    .font(DesignTokens.Fonts.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(DesignTokens.Space.block)
+            .background(
+                DesignTokens.Surface.bannerTint(DesignTokens.Status.warning),
+                in: RoundedRectangle(cornerRadius: DesignTokens.Radius.inset)
+            )
+        }
+
+        Picker(
+            "Pi 档位",
+            selection: Binding(
+                get: { currentLevel(for: surface) ?? .fullyExposed },
+                set: { level in
+                    guard let setPiExposureLevel else { return }
+                    runPiAction { await setPiExposureLevel(level) }
+                }
+            )
+        ) {
+            ForEach(
+                ExposureLevel.allCases.filter { !surface.unsupportedLevels.contains($0) },
+                id: \.self
+            ) { level in
+                Text(level.displayName).tag(level)
+            }
+        }
+        .pickerStyle(.segmented)
+        .disabled(
+            isApplyingPiChange || !health.allowsVisibilityWrites ||
+                currentLevel(for: surface) == nil
+        )
+
+        if case .readFailed = surface.state {
+            Text("请修复或删除 ~/.pi/agent/pagugu/visibility.json 后重试。")
+                .font(DesignTokens.Fonts.caption)
+                .foregroundStyle(DesignTokens.Status.warning)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
+        Text("切换后请在 Pi 中运行 /reload 或重启 Pi。")
+            .font(DesignTokens.Fonts.caption)
+            .foregroundStyle(DesignTokens.Status.neutral)
+
+        if let installOrUpdatePiExtension {
+            Button("安装/更新 Pi 扩展", systemImage: "shippingbox.and.arrow.backward") {
+                runPiAction { await installOrUpdatePiExtension() }
+            }
+            .disabled(isApplyingPiChange)
+            .help("幂等安装或升级 ~/.pi/agent/extensions/pagugu-visibility/index.ts。")
+        }
+    }
+
     private func selectedLevel(for surface: HostInvocationSurface) -> ExposureLevel {
         surface.claimLevel ?? currentLevel(for: surface) ?? .fullyExposed
     }
@@ -1397,6 +1499,14 @@ private struct InvocationSurfaceBlock: View {
         Task {
             await action()
             isApplyingChange = false
+        }
+    }
+
+    private func runPiAction(_ action: @escaping () async -> Void) {
+        isApplyingPiChange = true
+        Task {
+            await action()
+            isApplyingPiChange = false
         }
     }
 
