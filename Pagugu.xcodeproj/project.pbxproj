@@ -39,6 +39,9 @@
 		D54000000000000000000001 /* ClaudeConfigWriterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D54000000000000000000002 /* ClaudeConfigWriterTests.swift */; };
 		D54000000000000000000003 /* ClaudeConfigWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D54000000000000000000004 /* ClaudeConfigWriter.swift */; };
 		D54000000000000000000005 /* AppModelClaudeConflictTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D54000000000000000000006 /* AppModelClaudeConflictTests.swift */; };
+		D55000000000000000000001 /* CodexConfigWriterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D55000000000000000000002 /* CodexConfigWriterTests.swift */; };
+		D55000000000000000000003 /* CodexConfigWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D55000000000000000000004 /* CodexConfigWriter.swift */; };
+		D55000000000000000000005 /* AppModelCodexTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D55000000000000000000006 /* AppModelCodexTests.swift */; };
 		D15A00000000000000000012 /* SkillIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15A00000000000000000011 /* SkillIdentity.swift */; };
 		D15A00000000000000000002 /* IdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15A00000000000000000001 /* IdentityTests.swift */; };
 		2F2190FFC541C404FC060850 /* PaguguTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4E55B78FCEBA348B72F43A4 /* PaguguTests.swift */; };
@@ -94,6 +97,9 @@
 		D54000000000000000000002 /* ClaudeConfigWriterTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ClaudeConfigWriterTests.swift; sourceTree = "<group>"; };
 		D54000000000000000000004 /* ClaudeConfigWriter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ClaudeConfigWriter.swift; path = HostConfig/ClaudeConfigWriter.swift; sourceTree = "<group>"; };
 		D54000000000000000000006 /* AppModelClaudeConflictTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppModelClaudeConflictTests.swift; sourceTree = "<group>"; };
+		D55000000000000000000002 /* CodexConfigWriterTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CodexConfigWriterTests.swift; sourceTree = "<group>"; };
+		D55000000000000000000004 /* CodexConfigWriter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CodexConfigWriter.swift; path = HostConfig/CodexConfigWriter.swift; sourceTree = "<group>"; };
+		D55000000000000000000006 /* AppModelCodexTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppModelCodexTests.swift; sourceTree = "<group>"; };
 		D15A00000000000000000011 /* SkillIdentity.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SkillIdentity.swift; path = Identity/SkillIdentity.swift; sourceTree = "<group>"; };
 		D15A00000000000000000001 /* IdentityTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = IdentityTests.swift; sourceTree = "<group>"; };
 		09BE7DE72F107FBC97261DC7 /* ContentView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ContentView.swift; path = Views/ContentView.swift; sourceTree = "<group>"; };
@@ -190,6 +196,7 @@
 				D52000000000000000000004 /* HostConfigReader.swift */,
 				D53000000000000000000004 /* HostConfigWriter.swift */,
 				D54000000000000000000004 /* ClaudeConfigWriter.swift */,
+				D55000000000000000000004 /* CodexConfigWriter.swift */,
 				D15A00000000000000000034 /* SkillDirectoryEntry.swift */,
 				D15A00000000000000000042 /* SkillDirectory.swift */,
 				D15A00000000000000000052 /* SkillReadModel.swift */,
@@ -228,6 +235,8 @@
 				D53000000000000000000006 /* HostConfigWriterTests.swift */,
 				D54000000000000000000002 /* ClaudeConfigWriterTests.swift */,
 				D54000000000000000000006 /* AppModelClaudeConflictTests.swift */,
+				D55000000000000000000002 /* CodexConfigWriterTests.swift */,
+				D55000000000000000000006 /* AppModelCodexTests.swift */,
 				D15A00000000000000000062 /* AppModelTests.swift */,
 				D19000000000000000000002 /* GitEligibilityTests.swift */,
 				D21000000000000000000002 /* CheckRunTests.swift */,
@@ -340,6 +349,7 @@
 				D52000000000000000000003 /* HostConfigReader.swift in Sources */,
 				D53000000000000000000003 /* HostConfigWriter.swift in Sources */,
 				D54000000000000000000003 /* ClaudeConfigWriter.swift in Sources */,
+				D55000000000000000000003 /* CodexConfigWriter.swift in Sources */,
 				D15A00000000000000000033 /* SkillDirectoryEntry.swift in Sources */,
 				D15A00000000000000000041 /* SkillDirectory.swift in Sources */,
 				D15A00000000000000000051 /* SkillReadModel.swift in Sources */,
@@ -368,6 +378,8 @@
 				D53000000000000000000005 /* HostConfigWriterTests.swift in Sources */,
 				D54000000000000000000001 /* ClaudeConfigWriterTests.swift in Sources */,
 				D54000000000000000000005 /* AppModelClaudeConflictTests.swift in Sources */,
+				D55000000000000000000001 /* CodexConfigWriterTests.swift in Sources */,
+				D55000000000000000000005 /* AppModelCodexTests.swift in Sources */,
 				D15A00000000000000000061 /* AppModelTests.swift in Sources */,
 				D19000000000000000000001 /* GitEligibilityTests.swift in Sources */,
 				D21000000000000000000001 /* CheckRunTests.swift in Sources */,

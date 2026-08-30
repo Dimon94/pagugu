@@ -3,7 +3,7 @@ import Foundation
 // L3 COORD: Pagugu/AppModel/AppModel.swift
 // OUTPUT: AppModel UI intent/只读投影，以及只供 composition root 注入的 RegistryResetting reset seam。
 // POS: AppModel 模块（ADR-0009 §7）。@MainActor composition root：
-//      owns Skill Read Model、受限恢复/来源映射/调用面动作错误投影、Claude Code 主张动作顺序编排、
+//      owns Skill Read Model、受限恢复/来源映射/调用面动作错误投影、Claude Code/Codex 主张动作顺序编排、
 //      目录收起、Check/Update 瞬态、全部 UI intent 与启动/刷新编排；每次发布重读 HostConfig 调用面事实，
 //      合并 Registry Claim 派生分歧，并按实时 Git 事实重推导观察 freshness。
 //      取消确认或更新失败后，目标检出
@@ -14,7 +14,8 @@ import Foundation
 //      业务规则重建。
 // TEST: repo://PaguguTests/AppModelTests.swift（Registry gate、requestQuit 退出 intent、Project Scan Root intent、
 //      目录投影与 intent 路由 smoke、审计呈现投影）；repo://PaguguTests/AppModelSurfaceTests.swift（调用面事实）；
-//      repo://PaguguTests/AppModelClaudeConflictTests.swift（Claude 主张、分歧、冲突解决与恢复）。
+//      repo://PaguguTests/AppModelClaudeConflictTests.swift（Claude 主张与冲突解决）；
+//      repo://PaguguTests/AppModelCodexTests.swift（Codex 三档、分歧解决、恢复与失败）。
 
 enum AppRun: Equatable, Sendable {
     case check
@@ -68,15 +69,15 @@ enum VisibilityClaimActionError: Equatable, Sendable {
     var reason: String {
         switch self {
         case .skillUnavailable:
-            return "该 Skill 已不在当前 Claude Code 投影中。请重新扫描后再试。"
+            return "该 Skill 已不在当前目标 Agent Host 投影中。请重新扫描后再试。"
         case .ambiguousSkillName:
-            return "存在多个同名 Claude Code Skill，无法把单个身份主张安全写入共享名称配置。请先消除同名冲突。"
+            return "存在多个同名 Skill，无法把单个身份主张安全写入共享名称配置。请先消除同名冲突。"
         case .claimUnavailable:
-            return "当前没有可重新应用的 Claude Code 主张。请重新选择档位。"
+            return "当前没有可重新应用的调用面主张。请重新选择档位。"
         case .registry(let error):
             return error.reason
         case .hostConfiguration(let error):
-            return "Claude Code 配置写入失败。\(error.recoverySuggestion)"
+            return "Agent Host 配置写入失败。\(error.recoverySuggestion)"
         }
     }
 }
@@ -121,6 +122,7 @@ final class AppModel: ObservableObject {
     private let audit: AuditEvidence
     private let hostConfigReader: HostConfigReader
     private let claudeConfigWriter: ClaudeConfigWriter
+    private let codexConfigWriter: CodexConfigWriter
     private let gitInspector: any GitInspecting
     private let gitExecutor: any GitExecuting
     private let terminateApplication: () -> Void
@@ -137,6 +139,7 @@ final class AppModel: ObservableObject {
         gitExecutor: any GitExecuting = GitClient(),
         hostConfigReader: HostConfigReader = HostConfigReader(),
         claudeConfigWriter: ClaudeConfigWriter = ClaudeConfigWriter(),
+        codexConfigWriter: CodexConfigWriter = CodexConfigWriter(),
         registryResetter: (any RegistryResetting)? = nil,
         terminateApplication: @escaping () -> Void = {}
     ) {
@@ -147,6 +150,7 @@ final class AppModel: ObservableObject {
         self.audit = AuditEvidence(persistence: persistence)
         self.hostConfigReader = hostConfigReader
         self.claudeConfigWriter = claudeConfigWriter
+        self.codexConfigWriter = codexConfigWriter
         self.gitInspector = gitInspector
         self.gitExecutor = gitExecutor
         self.terminateApplication = terminateApplication
@@ -314,18 +318,17 @@ final class AppModel: ObservableObject {
         for entry: SkillDirectoryEntry,
         visibilityClaims: [VisibilityClaim]
     ) -> [HostInvocationSurface] {
-        let claim = visibilityClaims.first { claim in
+        let claims = visibilityClaims.filter { claim in
             claim.skillSourceKey == entry.id.sourceKey.registryValue &&
-                claim.repositoryRelativePath == entry.id.repositoryRelativePath &&
-                claim.host == .claude
+                claim.repositoryRelativePath == entry.id.repositoryRelativePath
         }
         return hostConfigReader.invocationSurfaces(
             skillName: entry.displayName,
             installations: entry.installations
         ).map { surface in
-            surface.host == .claude
-                ? surface.withClaimLevel(claim?.exposureLevel)
-                : surface
+            surface.withClaimLevel(
+                claims.first { $0.host == surface.host }?.exposureLevel
+            )
         }
     }
 
@@ -337,26 +340,68 @@ final class AppModel: ObservableObject {
         await publishDiscovery()
     }
 
-    // L4 IN: Skill Identity 必须来自当前 Read Model、已安装到 Claude Code，且归一化 name 未被其他 Claude Skill 使用。
-    // OUT: Registry 主张 durable-first 写入，再合并写用户级 Claude settings；无论成功失败都重读文件事实刷新投影。
-    // FAIL: 同名配置键歧义或 Registry 失败不触碰 Claude 配置；配置失败保留已落盘主张并显式呈现错误与恢复方向。
-    // L6 CHAIN: 重查当前 Skill 与 name-key 唯一性 → Registry set → Claude merge write → 完整 Discovery 重读 Claim 与配置事实。
+    // L4 IN: Skill Identity 必须来自当前 Read Model、已安装到目标 Host，且归一化 name 未被同宿主其他 Skill 使用。
+    // OUT: Registry 主张 durable-first，再由对应 adapter 做局部合并写；无论成功失败都重读文件事实刷新投影。
+    // FAIL: 同名配置键歧义或 Registry 失败不触碰 Host 配置；配置失败保留已落盘主张并显式呈现恢复方向。
+    // L6 CHAIN: 重查当前 Skill 与 name-key 唯一性 → Registry set → Host adapter write → 完整 Discovery 重读 Claim 与事实。
     func setClaudeExposureLevel(
         _ exposureLevel: ExposureLevel,
         for skillIdentity: SkillIdentity
     ) async -> Bool {
-        guard let entry = claudeSkillEntry(for: skillIdentity) else {
+        await setExposureLevel(exposureLevel, for: skillIdentity, host: .claude)
+    }
+
+    func setCodexExposureLevel(
+        _ exposureLevel: ExposureLevel,
+        for skillIdentity: SkillIdentity
+    ) async -> Bool {
+        await setExposureLevel(exposureLevel, for: skillIdentity, host: .codex)
+    }
+
+    /// 显式用当前 Registry Claim 重写目标 Host 配置；不自动触发、不改变主张。
+    func reapplyClaudeVisibilityClaim(for skillIdentity: SkillIdentity) async -> Bool {
+        await reapplyVisibilityClaim(for: skillIdentity, host: .claude)
+    }
+
+    func reapplyCodexVisibilityClaim(for skillIdentity: SkillIdentity) async -> Bool {
+        await reapplyVisibilityClaim(for: skillIdentity, host: .codex)
+    }
+
+    /// 采用实时磁盘配置只清除 Registry Claim，不改宿主文件。
+    func adoptClaudeDiskConfiguration(for skillIdentity: SkillIdentity) async -> Bool {
+        await adoptDiskConfiguration(for: skillIdentity, host: .claude)
+    }
+
+    func adoptCodexDiskConfiguration(for skillIdentity: SkillIdentity) async -> Bool {
+        await adoptDiskConfiguration(for: skillIdentity, host: .codex)
+    }
+
+    /// 恢复最近一次 Pagugu 写入目标 Host 配置前的单槽备份；现有主张保留并重新派生分歧。
+    func restoreClaudeConfiguration() async -> Bool {
+        await restoreConfiguration(for: .claude)
+    }
+
+    func restoreCodexConfiguration() async -> Bool {
+        await restoreConfiguration(for: .codex)
+    }
+
+    func setExposureLevel(
+        _ exposureLevel: ExposureLevel,
+        for skillIdentity: SkillIdentity,
+        host: AgentHost
+    ) async -> Bool {
+        guard let entry = hostSkillEntry(for: skillIdentity, host: host) else {
             visibilityClaimError = .skillUnavailable
             return false
         }
-        guard !hasClaudeConfigurationKeyCollision(for: entry) else {
+        guard !hasConfigurationKeyCollision(for: entry, host: host) else {
             visibilityClaimError = .ambiguousSkillName
             return false
         }
         let claim = VisibilityClaim(
             skillSourceKey: skillIdentity.sourceKey.registryValue,
             repositoryRelativePath: skillIdentity.repositoryRelativePath,
-            host: .claude,
+            host: host,
             exposureLevel: exposureLevel
         )
         do {
@@ -368,16 +413,18 @@ final class AppModel: ObservableObject {
             visibilityClaimError = .registry(.notLoaded)
             return false
         }
-        return await applyClaudeConfiguration(exposureLevel, for: entry)
+        return await applyHostConfiguration(exposureLevel, for: entry, host: host)
     }
 
-    /// 显式用当前 Registry Claim 重写 Claude 配置；不自动触发、不改变主张。
-    func reapplyClaudeVisibilityClaim(for skillIdentity: SkillIdentity) async -> Bool {
-        guard let entry = claudeSkillEntry(for: skillIdentity) else {
+    func reapplyVisibilityClaim(
+        for skillIdentity: SkillIdentity,
+        host: AgentHost
+    ) async -> Bool {
+        guard let entry = hostSkillEntry(for: skillIdentity, host: host) else {
             visibilityClaimError = .skillUnavailable
             return false
         }
-        guard !hasClaudeConfigurationKeyCollision(for: entry) else {
+        guard !hasConfigurationKeyCollision(for: entry, host: host) else {
             visibilityClaimError = .ambiguousSkillName
             return false
         }
@@ -385,17 +432,19 @@ final class AppModel: ObservableObject {
         guard let claim = claims.first(where: { claim in
             claim.skillSourceKey == skillIdentity.sourceKey.registryValue &&
                 claim.repositoryRelativePath == skillIdentity.repositoryRelativePath &&
-                claim.host == .claude
+                claim.host == host
         }) else {
             visibilityClaimError = .claimUnavailable
             return false
         }
-        return await applyClaudeConfiguration(claim.exposureLevel, for: entry)
+        return await applyHostConfiguration(claim.exposureLevel, for: entry, host: host)
     }
 
-    /// 采用实时磁盘配置只清除 Registry Claim，不改宿主文件。
-    func adoptClaudeDiskConfiguration(for skillIdentity: SkillIdentity) async -> Bool {
-        guard claudeSkillEntry(for: skillIdentity) != nil else {
+    func adoptDiskConfiguration(
+        for skillIdentity: SkillIdentity,
+        host: AgentHost
+    ) async -> Bool {
+        guard hostSkillEntry(for: skillIdentity, host: host) != nil else {
             visibilityClaimError = .skillUnavailable
             return false
         }
@@ -403,7 +452,7 @@ final class AppModel: ObservableObject {
             let changed = try await registry.deleteVisibilityClaim(
                 skillSourceKey: skillIdentity.sourceKey.registryValue,
                 repositoryRelativePath: skillIdentity.repositoryRelativePath,
-                host: .claude
+                host: host
             )
             visibilityClaimError = nil
             if changed { await publishDiscovery() }
@@ -417,10 +466,16 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// 恢复最近一次 Pagugu 写入用户级 Claude 配置前的单槽备份；现有主张保留并重新派生分歧。
-    func restoreClaudeConfiguration() async -> Bool {
+    func restoreConfiguration(for host: AgentHost) async -> Bool {
         do {
-            try claudeConfigWriter.restoreConfiguration()
+            switch host {
+            case .claude:
+                try claudeConfigWriter.restoreConfiguration()
+            case .codex:
+                try codexConfigWriter.restoreConfiguration()
+            case .pi:
+                throw HostConfigWriterError.unsupportedExposureLevel
+            }
             visibilityClaimError = nil
             await publishDiscovery()
             return true
@@ -896,37 +951,55 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func claudeSkillEntry(for skillIdentity: SkillIdentity) -> SkillDirectoryEntry? {
+    private func hostSkillEntry(
+        for skillIdentity: SkillIdentity,
+        host: AgentHost
+    ) -> SkillDirectoryEntry? {
         guard registryReady, registryRecovery == nil,
               let entry = readModel.skillEntry(for: skillIdentity),
-              entry.hosts.contains(.claude) else { return nil }
+              entry.hosts.contains(host) else { return nil }
         return entry
     }
 
-    private func hasClaudeConfigurationKeyCollision(for entry: SkillDirectoryEntry) -> Bool {
+    private func hasConfigurationKeyCollision(
+        for entry: SkillDirectoryEntry,
+        host: AgentHost
+    ) -> Bool {
         guard let normalizedName = NameCollisionEngine.normalizedName(entry.displayName) else {
             return true
         }
         let attributedCollision = readModel.sources.flatMap(\.skills).contains { otherEntry in
-            otherEntry.id != entry.id && otherEntry.hosts.contains(.claude) &&
+            otherEntry.id != entry.id && otherEntry.hosts.contains(host) &&
                 NameCollisionEngine.normalizedName(otherEntry.displayName) == normalizedName
         }
         let unattributedCollision = readModel.unattributedInstallations.contains { item in
-            item.hosts.contains(.claude) &&
+            item.hosts.contains(host) &&
                 NameCollisionEngine.normalizedName(item.displayName) == normalizedName
         }
         return attributedCollision || unattributedCollision
     }
 
-    private func applyClaudeConfiguration(
+    private func applyHostConfiguration(
         _ exposureLevel: ExposureLevel,
-        for entry: SkillDirectoryEntry
+        for entry: SkillDirectoryEntry,
+        host: AgentHost
     ) async -> Bool {
         do {
-            try claudeConfigWriter.apply(
-                exposureLevel: exposureLevel,
-                forSkillNamed: entry.displayName
-            )
+            switch host {
+            case .claude:
+                try claudeConfigWriter.apply(
+                    exposureLevel: exposureLevel,
+                    forSkillNamed: entry.displayName
+                )
+            case .codex:
+                try codexConfigWriter.apply(
+                    exposureLevel: exposureLevel,
+                    forSkillNamed: entry.displayName,
+                    installations: entry.installations
+                )
+            case .pi:
+                throw HostConfigWriterError.unsupportedExposureLevel
+            }
             visibilityClaimError = nil
             await publishDiscovery()
             return true

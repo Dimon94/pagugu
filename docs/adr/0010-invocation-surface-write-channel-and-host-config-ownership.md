@@ -6,7 +6,7 @@ Related: repo://CONTEXT.md、repo://docs/adr/0002-skill-source-mapping.md、repo
 
 ## Context
 
-调用面调控要求 Pagugu 修改 Agent Host 的配置文件：Claude Code 的 settings.json（`skillOverrides`，四档：`on` / `name-only` / `user-invocable-only` / `off`，v2.1.129+）与 Codex 的 `~/.codex/config.toml`（`[[skills.config]] enabled = false`，全禁用）及 Skill 内 `agents/openai.yaml`（`policy.allow_implicit_invocation = false`，仅显式）。Codex 两条 schema 已由官方 Agent Skills 文档核实；Claude `skillOverrides` 已由官方 Claude Code Skills 文档核实。写通道仍必须保持本 ADR 的结构化合并与保全约束。
+调用面调控要求 Pagugu 修改 Agent Host 的配置文件：Claude Code 的 settings.json（`skillOverrides`，四档：`on` / `name-only` / `user-invocable-only` / `off`，v2.1.129+）与 Codex 的用户级 `~/.codex/config.toml`（`[[skills.config]] enabled = false`，全禁用）及用户级 `~/.codex/agents/openai.yaml`（`policy.allow_implicit_invocation = false`，仅显式）。Codex 两条字段 schema 已由官方 Agent Skills 文档核实；具体用户级写入位置由后续 Ticket #55 在“不写 Skill 内容”边界内裁决。Claude `skillOverrides` 已由官方 Claude Code Skills 文档核实。写通道仍必须保持本 ADR 的结构化合并与保全约束。
 
 宿主配置文件是共享所有权：用户会手改，宿主自己会重写。Pagugu 的可见性主张与文件事实可能分歧。需要裁决写入方式、原始配置保全、恢复能力与冲突语义。Pi 侧不写宿主配置，见 repo://docs/adr/0011-pagugu-owned-pi-extension.md。
 

@@ -3,8 +3,9 @@ import Foundation
 // L3 COORD: Pagugu/HostConfig/HostConfigReader.swift
 // INPUT: Host Profile 能力矩阵、Skill 展示名与逐 Installation 路径、宿主实时配置文件。
 // OUTPUT: 逐已安装 Agent Host 的调用面只读事实；不写文件、不持久化、不生成 Visibility Claim。
-// POS: HostConfig 模块。owns Claude JSON、Codex TOML/YAML 与 Pi 独占 JSON 的窄读取协议，
-//      以及配置值到 Exposure Level/Unsupported/读取失败的确定性翻译。
+// POS: HostConfig 模块。owns Claude JSON、Codex TOML/YAML 与 Pi 独占 JSON 的窄读取协议；
+//      Codex 与 Writer 共用 CodexLineConfiguration parser，避免读写 schema 分叉；
+//      Reader owns 配置值到 Exposure Level/Unsupported/读取失败的确定性翻译。
 // TEST: repo://PaguguTests/HostConfigReaderTests.swift、repo://PaguguTests/AppModelSurfaceTests.swift。
 
 /// 单个宿主当前调用面事实。读取失败与宿主能力缺口都不能冒充其他档位。
@@ -84,12 +85,6 @@ struct HostConfigReader: Sendable {
 
     private struct PiVisibilityDocument: Decodable {
         let skills: [String: ExposureLevel]
-    }
-
-    private struct CodexSkillConfiguration {
-        let name: String?
-        let path: String?
-        let enabled: Bool
     }
 
     let homeDirectory: URL
@@ -242,90 +237,12 @@ struct HostConfigReader: Sendable {
 
     private func codexSkillConfigurations(at url: URL) throws -> [CodexSkillConfiguration] {
         guard let data = try readExistingFile(at: url) else { return [] }
-        guard let contents = String(data: data, encoding: .utf8) else {
-            throw ReadError.invalidDocument
-        }
-
-        var configurations: [CodexSkillConfiguration] = []
-        var fields: [String: String]?
-
-        func finishCurrentSection() throws {
-            guard let fields else { return }
-            guard let enabledValue = fields["enabled"],
-                  let enabled = parseBoolean(enabledValue),
-                  fields["name"] != nil || fields["path"] != nil else {
-                throw ReadError.invalidDocument
-            }
-            let name = try fields["name"].map(parseTOMLString)
-            let path = try fields["path"].map(parseTOMLString)
-            configurations.append(CodexSkillConfiguration(name: name, path: path, enabled: enabled))
-        }
-
-        for rawLine in contents.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = stripComment(from: String(rawLine)).trimmingCharacters(in: .whitespaces)
-            guard !line.isEmpty else { continue }
-            if line.hasPrefix("[") {
-                try finishCurrentSection()
-                if line == "[[skills.config]]" {
-                    fields = [:]
-                } else {
-                    if line.contains("skills.config") && line != "[[skills.config]]" {
-                        throw ReadError.invalidDocument
-                    }
-                    fields = nil
-                }
-                continue
-            }
-            guard fields != nil else { continue }
-            guard let equalsIndex = line.firstIndex(of: "=") else {
-                throw ReadError.invalidDocument
-            }
-            let key = line[..<equalsIndex].trimmingCharacters(in: .whitespaces)
-            let value = line[line.index(after: equalsIndex)...].trimmingCharacters(in: .whitespaces)
-            guard ["name", "path", "enabled"].contains(key) else { continue }
-            guard fields?[key] == nil, !value.isEmpty else { throw ReadError.invalidDocument }
-            fields?[key] = value
-        }
-        try finishCurrentSection()
-        return configurations
+        return try CodexLineConfiguration.skillConfigurations(from: data)
     }
 
     private func codexAllowsImplicitInvocation(at url: URL) throws -> Bool? {
         guard let data = try readExistingFile(at: url) else { return nil }
-        guard let contents = String(data: data, encoding: .utf8) else {
-            throw ReadError.invalidDocument
-        }
-        var policyIndent: Int?
-        var result: Bool?
-        for rawLine in contents.split(separator: "\n", omittingEmptySubsequences: false) {
-            let withoutComment = stripComment(from: String(rawLine))
-            guard !withoutComment.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
-            guard !withoutComment.prefix(while: { $0 == " " || $0 == "\t" }).contains("\t") else {
-                throw ReadError.invalidDocument
-            }
-            let indent = withoutComment.prefix(while: { $0 == " " }).count
-            let line = withoutComment.trimmingCharacters(in: .whitespaces)
-            if line == "policy:" {
-                policyIndent = indent
-                continue
-            }
-            if line.hasPrefix("policy:") {
-                throw ReadError.invalidDocument
-            }
-            if let currentPolicyIndent = policyIndent, indent <= currentPolicyIndent {
-                policyIndent = nil
-            }
-            guard line.hasPrefix("allow_implicit_invocation") else { continue }
-            guard policyIndent.map({ indent > $0 }) == true || indent == 0,
-                  let colonIndex = line.firstIndex(of: ":"),
-                  line[..<colonIndex].trimmingCharacters(in: .whitespaces) == "allow_implicit_invocation",
-                  result == nil,
-                  let value = parseBoolean(String(line[line.index(after: colonIndex)...])) else {
-                throw ReadError.invalidDocument
-            }
-            result = value
-        }
-        return result
+        return try CodexLineConfiguration.allowsImplicitInvocation(from: data)
     }
 
     // MARK: - Pi visibility.json
@@ -355,56 +272,6 @@ struct HostConfigReader: Sendable {
         } catch {
             throw ReadError.invalidDocument
         }
-    }
-
-    private func parseTOMLString(_ rawValue: String) throws -> String {
-        let value = rawValue.trimmingCharacters(in: .whitespaces)
-        if value.count >= 2, value.first == "'", value.last == "'" {
-            return String(value.dropFirst().dropLast())
-        }
-        if value.count >= 2, value.first == "\"", value.last == "\"",
-           let data = value.data(using: .utf8),
-           let decoded = try? JSONDecoder().decode(String.self, from: data) {
-            return decoded
-        }
-        throw ReadError.invalidDocument
-    }
-
-    private func parseBoolean(_ rawValue: String) -> Bool? {
-        switch rawValue.trimmingCharacters(in: .whitespaces) {
-        case "true": return true
-        case "false": return false
-        default: return nil
-        }
-    }
-
-    private func stripComment(from line: String) -> String {
-        var inSingleQuote = false
-        var inDoubleQuote = false
-        var escaped = false
-        for index in line.indices {
-            let character = line[index]
-            if inDoubleQuote && escaped {
-                escaped = false
-                continue
-            }
-            if inDoubleQuote && character == "\\" {
-                escaped = true
-                continue
-            }
-            if character == "'" && !inDoubleQuote {
-                inSingleQuote.toggle()
-                continue
-            }
-            if character == "\"" && !inSingleQuote {
-                inDoubleQuote.toggle()
-                continue
-            }
-            if character == "#" && !inSingleQuote && !inDoubleQuote {
-                return String(line[..<index])
-            }
-        }
-        return line
     }
 
     private func normalizedPath(_ path: String, appendingSkillMarkdown: Bool) -> String {

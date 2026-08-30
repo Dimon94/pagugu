@@ -1,9 +1,9 @@
 import Foundation
 
 // L3 COORD: Pagugu/HostConfig/HostConfigWriter.swift
-// INPUT: JSON 宿主配置路径、Pagugu 负责的非空 key path、目标 JSON 值或删除意图，以及 Registry Claim 映射后的期望值。
-// OUTPUT: 只修改目标 key 的原子合并写、提交前漂移拒绝、`<file>.pagugu-backup` 单槽备份、备份恢复与实时一致/分歧派生。
-// POS: HostConfig 模块的通用 JSON 写通道。does not own 具体宿主档位映射、Visibility Claim 持久化、UI 或文件监听。
+// INPUT: 宿主配置路径、Pagugu-owned 局部字节变换；JSON 通道另接收非空 key path、目标值或删除意图。
+// OUTPUT: 提交前漂移拒绝、原子替换、单动作多文件 `<file>.pagugu-backup` 快照备份与恢复；JSON key-path 合并和实时分歧派生。
+// POS: HostConfig 模块的通用文件提交机制与 JSON 写通道。does not own TOML/YAML 协议、具体宿主档位映射、Visibility Claim、UI 或监听。
 // TEST: repo://PaguguTests/HostConfigWriterTests.swift。
 
 /// 宿主配置 JSON 的类型安全值。未知配置经此类型解码并在合并写中保留。
@@ -104,6 +104,8 @@ enum HostConfigClaimState: Equatable, Sendable {
 enum HostConfigWriterError: Error, Equatable, Sendable {
     case invalidKeyPath
     case invalidConfiguration
+    case unsupportedExposureLevel
+    case effectiveConfigurationMismatch
     case backupUnavailable
     case externallyModified
     case fileOperationFailed
@@ -113,7 +115,11 @@ enum HostConfigWriterError: Error, Equatable, Sendable {
         case .invalidKeyPath:
             return "请修正 Pagugu 的宿主配置映射后重试。"
         case .invalidConfiguration:
-            return "请修复宿主 JSON 配置格式后重试。"
+            return "请修复宿主配置格式后重试。"
+        case .unsupportedExposureLevel:
+            return "请选择该 Agent Host 支持的调用面档位后重试。"
+        case .effectiveConfigurationMismatch:
+            return "当前宿主配置无法达到所选档位。请检查更高优先级配置，或采用磁盘配置。"
         case .backupUnavailable:
             return "当前没有可恢复的 Pagugu 写前备份。"
         case .externallyModified:
@@ -143,43 +149,105 @@ struct HostConfigWriter: Sendable {
         in configurationURL: URL
     ) throws {
         try validate(keyPath)
-        let originalBytes = try readBytesIfPresent(at: configurationURL)
-        let root = try decodeRoot(from: originalBytes)
-        let updated = try replacing(value, at: ArraySlice(keyPath), in: root)
+        try rewriteConfiguration(at: configurationURL) { originalBytes in
+            let root = try decodeRoot(from: originalBytes)
+            let updated = try replacing(value, at: ArraySlice(keyPath), in: root)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            do {
+                return try encoder.encode(updated)
+            } catch {
+                throw HostConfigWriterError.invalidConfiguration
+            }
+        }
+    }
 
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let updatedBytes: Data
-        do {
-            updatedBytes = try encoder.encode(updated)
-        } catch {
+    /// L4 IN: transform 接收首次实时读取的完整字节；nil 返回表示该文件无需写入。
+    /// OUT: 只提交 transform 产出的完整字节；提交前重读防漂移，未漂移才备份并原子替换。
+    /// FAIL: 读取、transform、备份或目标替换失败时不冒充成功；漂移时不生成备份、不覆盖外部写入。
+    func rewriteConfiguration(
+        at configurationURL: URL,
+        transform: (Data?) throws -> Data?
+    ) throws {
+        try rewriteConfigurations(at: [configurationURL]) { _, originalBytes in
+            try transform(originalBytes)
+        }
+    }
+
+    /// L4 IN: configurationURLs 必须非空且不重复；transform 分别接收同一动作开始时的逐文件完整字节。
+    /// OUT: 任一文件需变更时，先把动作涉及的全部现存文件快照到各自单槽备份，再逐文件原子提交变更。
+    /// FAIL: 任一 transform 失败或任一文件在提交前漂移时全部目标零写入；提交中断时保留同动作备份供显式恢复。
+    /// L6 CHAIN: 一次读取全部文件 → 产出全部局部变换 → 一次 hook → 全部重读防漂移 → 全部快照备份 → 逐文件原子替换。
+    func rewriteConfigurations(
+        at configurationURLs: [URL],
+        transform: (URL, Data?) throws -> Data?
+    ) throws {
+        guard !configurationURLs.isEmpty,
+              Set(configurationURLs).count == configurationURLs.count else {
             throw HostConfigWriterError.invalidConfiguration
         }
 
-        try ensureParentDirectory(of: configurationURL)
+        let snapshots = try configurationURLs.map { configurationURL in
+            ConfigurationSnapshot(
+                url: configurationURL,
+                originalBytes: try readBytesIfPresent(at: configurationURL)
+            )
+        }
+        let rewrites = try snapshots.compactMap { snapshot -> ConfigurationRewrite? in
+            guard let updatedBytes = try transform(snapshot.url, snapshot.originalBytes),
+                  updatedBytes != snapshot.originalBytes else {
+                return nil
+            }
+            return ConfigurationRewrite(url: snapshot.url, updatedBytes: updatedBytes)
+        }
+        guard !rewrites.isEmpty else { return }
+
+        for snapshot in snapshots {
+            try ensureParentDirectory(of: snapshot.url)
+        }
         do {
             try beforeCommit()
         } catch {
             throw HostConfigWriterError.fileOperationFailed
         }
-        guard try readBytesIfPresent(at: configurationURL) == originalBytes else {
-            throw HostConfigWriterError.externallyModified
+        for snapshot in snapshots {
+            guard try readBytesIfPresent(at: snapshot.url) == snapshot.originalBytes else {
+                throw HostConfigWriterError.externallyModified
+            }
         }
-        if let originalBytes {
-            try writeAtomically(originalBytes, to: backupURL(for: configurationURL))
+        for snapshot in snapshots {
+            guard let originalBytes = snapshot.originalBytes else { continue }
+            try ensureParentDirectory(of: snapshot.url)
+            try writeAtomically(originalBytes, to: backupURL(for: snapshot.url))
         }
-        try writeAtomically(updatedBytes, to: configurationURL)
+        for rewrite in rewrites {
+            try ensureParentDirectory(of: rewrite.url)
+            try writeAtomically(rewrite.updatedBytes, to: rewrite.url)
+        }
     }
 
     /// L4 OUT: 将固定单槽备份的完整字节原子覆盖回目标文件；备份本身保留。
     /// FAIL: 缺少备份时零副作用；读取或覆盖失败时返回稳定错误与恢复方向。
     func restoreBackup(for configurationURL: URL) throws {
-        let backupURL = backupURL(for: configurationURL)
-        guard let bytes = try readBytesIfPresent(at: backupURL) else {
+        try restoreBackups(for: [configurationURL])
+    }
+
+    /// L4 OUT: 一次动作恢复全部现存单槽备份；没有任何备份时明确失败。每个目标都用原子替换，备份保留。
+    func restoreBackups(for configurationURLs: [URL]) throws {
+        let uniqueURLs = Array(Set(configurationURLs)).sorted { $0.path < $1.path }
+        let restorable = try uniqueURLs.compactMap { configurationURL -> (URL, Data)? in
+            guard let bytes = try readBytesIfPresent(at: backupURL(for: configurationURL)) else {
+                return nil
+            }
+            return (configurationURL, bytes)
+        }
+        guard !restorable.isEmpty else {
             throw HostConfigWriterError.backupUnavailable
         }
-        try ensureParentDirectory(of: configurationURL)
-        try writeAtomically(bytes, to: configurationURL)
+        for (configurationURL, bytes) in restorable {
+            try ensureParentDirectory(of: configurationURL)
+            try writeAtomically(bytes, to: configurationURL)
+        }
     }
 
     /// L4 IN: expecting 是 Registry Claim 经具体宿主 adapter 映射后的 JSON 期望值；nil 表示期望 key 不存在。
@@ -193,6 +261,16 @@ struct HostConfigWriter: Sendable {
         let root = try decodeRoot(from: readBytesIfPresent(at: configurationURL))
         let currentValue = try value(at: ArraySlice(keyPath), in: root)
         return currentValue == expectedValue ? .consistent : .divergent
+    }
+
+    private struct ConfigurationSnapshot {
+        let url: URL
+        let originalBytes: Data?
+    }
+
+    private struct ConfigurationRewrite {
+        let url: URL
+        let updatedBytes: Data
     }
 
     private func validate(_ keyPath: [String]) throws {
