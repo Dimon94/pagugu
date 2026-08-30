@@ -60,6 +60,46 @@ final class HostConfigWriterTests: XCTestCase {
         )
     }
 
+    func testDeletingMissingLeafLeavesExistingConfigurationAndBackupSlotUntouched() throws {
+        let originalBytes = Data(
+            #"{"theme":"dark","skillOverrides":{"other":"off"}}"#.utf8
+        )
+        try originalBytes.write(to: configurationURL)
+        let writer = HostConfigWriter()
+
+        try writer.merge(
+            nil,
+            at: ["skillOverrides", "helper"],
+            in: configurationURL
+        )
+
+        XCTAssertEqual(try Data(contentsOf: configurationURL), originalBytes)
+        XCTAssertFalse(fileManager.fileExists(
+            atPath: configurationURL.appendingPathExtension("pagugu-backup").path
+        ))
+        XCTAssertFalse(fileManager.fileExists(
+            atPath: configurationURL.appendingPathExtension("pagugu-backup-missing").path
+        ))
+    }
+
+    func testDeletingFromMissingConfigurationDoesNotCreateConfigurationOrBackupSlot() throws {
+        let writer = HostConfigWriter()
+
+        try writer.merge(
+            nil,
+            at: ["skillOverrides", "helper"],
+            in: configurationURL
+        )
+
+        XCTAssertFalse(fileManager.fileExists(atPath: configurationURL.path))
+        XCTAssertFalse(fileManager.fileExists(
+            atPath: configurationURL.appendingPathExtension("pagugu-backup").path
+        ))
+        XCTAssertFalse(fileManager.fileExists(
+            atPath: configurationURL.appendingPathExtension("pagugu-backup-missing").path
+        ))
+    }
+
     func testRestoreRemovesConfigurationCreatedWhenFileWasOriginallyMissing() throws {
         let writer = HostConfigWriter()
         let keyPath = ["skillOverrides", "helper"]

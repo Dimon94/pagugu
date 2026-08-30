@@ -78,6 +78,48 @@ final class PiExtensionHealthTests: XCTestCase {
     }
 
     @MainActor
+    func testPiRestoreRejectsMissingExtensionWithoutChangingConfiguration() async throws {
+        let manager = PiExtensionManager(homeDirectory: homeDirectory, sourceURL: sourceURL)
+        XCTAssertTrue(try manager.installOrUpdate())
+        let model = try await makeStartedModel(extensionManager: manager)
+        let skill = try XCTUnwrap(model.readModel.sources.first?.skills.first)
+        let changed = await model.setPiExposureLevel(.explicitOnly, for: skill.id)
+        XCTAssertTrue(changed)
+        let configurationBeforeRestore = try Data(contentsOf: configurationURL)
+        try fileManager.removeItem(at: installationURL)
+
+        let restored = await model.restorePiConfiguration()
+
+        XCTAssertFalse(restored)
+        XCTAssertEqual(model.piExtensionHealth, .missing)
+        XCTAssertEqual(try Data(contentsOf: configurationURL), configurationBeforeRestore)
+        XCTAssertTrue(model.visibilityClaimError?.reason.contains("安装") == true)
+    }
+
+    @MainActor
+    func testPiRestoreRejectsIncompatibleExtensionWithoutChangingConfiguration() async throws {
+        let manager = PiExtensionManager(homeDirectory: homeDirectory, sourceURL: sourceURL)
+        XCTAssertTrue(try manager.installOrUpdate())
+        let model = try await makeStartedModel(extensionManager: manager)
+        let skill = try XCTUnwrap(model.readModel.sources.first?.skills.first)
+        let changed = await model.setPiExposureLevel(.fullyDisabled, for: skill.id)
+        XCTAssertTrue(changed)
+        let configurationBeforeRestore = try Data(contentsOf: configurationURL)
+        try extensionSource(version: "0").write(
+            to: installationURL,
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let restored = await model.restorePiConfiguration()
+
+        XCTAssertFalse(restored)
+        XCTAssertEqual(model.piExtensionHealth, .incompatible(installedVersion: "0"))
+        XCTAssertEqual(try Data(contentsOf: configurationURL), configurationBeforeRestore)
+        XCTAssertTrue(model.visibilityClaimError?.reason.contains("更新") == true)
+    }
+
+    @MainActor
     func testIncompatibleExtensionDisablesWritesAndCanBeUpgradedIdempotently() async throws {
         try fileManager.createDirectory(
             at: installationURL.deletingLastPathComponent(),

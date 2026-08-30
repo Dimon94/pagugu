@@ -140,7 +140,7 @@ struct HostConfigWriter: Sendable {
     }
 
     /// L4 IN: keyPath 必须非空且每段非空；value 为 nil 表示只删除该叶子 key。
-    /// OUT: 写入前把原文件完整字节或「原本不存在」状态覆盖到固定单槽备份；随后原子替换目标文件。未知 JSON 值保持语义不变。
+    /// OUT: 删除路径不存在时零写入；其余变更在写入前把原文件完整字节或「原本不存在」状态覆盖到固定单槽备份，再原子替换目标文件。未知 JSON 值保持语义不变。
     /// FAIL: 原文件不可读、JSON 非对象、路径中间值非对象、备份或目标写失败时动作明确失败；备份失败时目标不写；提交前磁盘漂移时不备份、不覆写。
     /// L6 CHAIN: 实时读取并解析完整对象 → 只变更目标叶子 → 完整编码 → 提交前重读比对 → 原子覆盖单槽备份 → 原子替换目标。
     func merge(
@@ -151,7 +151,9 @@ struct HostConfigWriter: Sendable {
         try validate(keyPath)
         try rewriteConfiguration(at: configurationURL) { originalBytes in
             let root = try decodeRoot(from: originalBytes)
-            let updated = try replacing(value, at: ArraySlice(keyPath), in: root)
+            guard let updated = try replacing(value, at: ArraySlice(keyPath), in: root) else {
+                return nil
+            }
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             do {
@@ -303,18 +305,28 @@ struct HostConfigWriter: Sendable {
         _ value: HostConfigValue?,
         at keyPath: ArraySlice<String>,
         in current: HostConfigValue
-    ) throws -> HostConfigValue {
+    ) throws -> HostConfigValue? {
         guard case .object(var object) = current, let key = keyPath.first else {
             throw HostConfigWriterError.invalidConfiguration
         }
         let remaining = keyPath.dropFirst()
         if remaining.isEmpty {
+            guard value != nil || object[key] != nil else { return nil }
             object[key] = value
             return .object(object)
         }
 
-        let child = object[key] ?? .object([:])
-        object[key] = try replacing(value, at: remaining, in: child)
+        let child: HostConfigValue
+        if let existingChild = object[key] {
+            child = existingChild
+        } else {
+            guard value != nil else { return nil }
+            child = .object([:])
+        }
+        guard let updatedChild = try replacing(value, at: remaining, in: child) else {
+            return nil
+        }
+        object[key] = updatedChild
         return .object(object)
     }
 

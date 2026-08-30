@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 //      + 无仓库可归行（来源不明）；消费 Skill Read Model 给出的逐态短语与五档顺序；无分组标题、无筛选 UI。
 //      右侧：Skill 详情呈现同名共存组徽标与逐宿主诊断、调用面实时档位与 Unsupported 缺口；
 //      Claude Code 行提供四档、Codex 行提供三档主张切换；读取失败时禁用档位写入；两者共用分歧解决与逐宿主单槽恢复；
-//      Pi 行提供三档切换、单槽恢复、扩展修复入口与 reload 提示；
+//      Pi 行提供三档切换、单槽恢复、扩展修复入口与 reload 提示；扩展不健康时禁用档位与恢复；
 //      Unsupported segment 禁用；Codex 用户级「仅显式」标明会影响全部 Codex Skill；并呈现状态与检出、安装位置、来源标识、
 //      SKILL.md 原文只读可选中、更新动作；
 //      空选择回欢迎引导。「相关记录」经工具栏「最近活动」承载。
@@ -1275,6 +1275,15 @@ func exposureLevelPickerIsDisabled(
     return false
 }
 
+// Pi 恢复与档位切换共用扩展健康门。AppModel 在执行点仍会实时重查。
+// TEST: repo://PaguguTests/PaguguTests.swift::testPiRestoreControlIsDisabledWhenExtensionCannotWrite
+func piRestoreConfigurationIsDisabled(
+    isApplyingChange: Bool,
+    health: PiExtensionHealth
+) -> Bool {
+    isApplyingChange || !health.allowsVisibilityWrites
+}
+
 private struct InvocationSurfaceBlock: View {
     let surfaces: [HostInvocationSurface]
     let piExtensionHealth: PiExtensionHealth?
@@ -1487,7 +1496,10 @@ private struct InvocationSurfaceBlock: View {
             Button("恢复 Pi 配置", systemImage: "arrow.uturn.backward") {
                 runPiAction { await restoreConfiguration(.pi) }
             }
-            .disabled(isApplyingPiChange)
+            .disabled(piRestoreConfigurationIsDisabled(
+                isApplyingChange: isApplyingPiChange,
+                health: health
+            ))
             .help("用最近一次 Pagugu 写入前的单槽备份恢复 Pi 可见性配置。")
         }
 

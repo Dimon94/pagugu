@@ -4,7 +4,7 @@ import Foundation
 // OUTPUT: AppModel UI intent/只读投影，以及只供 composition root 注入的 RegistryResetting reset seam。
 // POS: AppModel 模块（ADR-0009 §7）。@MainActor composition root：
 //      owns Skill Read Model、受限恢复/来源映射/调用面动作错误投影、Claude Code/Codex 主张动作顺序编排；
-//      Claude 写后校验用户级与项目级完整事实；Pi 扩展健康/安装升级与三档独占配置写入/恢复编排、reload 提示、目录收起、Check/Update 瞬态、
+//      Claude 写后校验用户级与项目级完整事实；Pi 扩展健康/安装升级与三档独占配置写入/健康门恢复编排、reload 提示、目录收起、Check/Update 瞬态、
 //      全部 UI intent 与启动/刷新编排；每次发布重读 HostConfig 调用面事实，
 //      合并 Registry Claim 派生分歧，并按实时 Git 事实重推导观察 freshness。
 //      取消确认或更新失败后，目标检出
@@ -497,7 +497,15 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Pi 恢复执行前实时重查扩展健康；扩展缺失、不兼容或不可读时零配置写入并给出修复方向。
     func restoreConfiguration(for host: AgentHost) async -> Bool {
+        if host == .pi {
+            piExtensionHealth = piExtensionManager.health()
+            guard piExtensionHealth.allowsVisibilityWrites else {
+                visibilityClaimError = .piExtensionUnavailable(piExtensionHealth)
+                return false
+            }
+        }
         do {
             switch host {
             case .claude:

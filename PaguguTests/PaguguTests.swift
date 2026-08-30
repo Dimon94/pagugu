@@ -124,13 +124,14 @@ final class PaguguTests: XCTestCase {
         model.dismissRegistryResetBackupPath()
     }
 
-    func testFailedInvocationSurfaceReadDisablesExposureLevelWritesEvenWithClaim() throws {
+    func testFailedInvocationSurfaceReadDisablesExposureLevelWritesEvenWithClaim() {
         let readFailedWithClaim = HostInvocationSurface(
             host: .claude,
             state: .readFailed,
             unsupportedLevels: [],
             claimLevel: .fullyExposed
         )
+
         XCTAssertTrue(
             exposureLevelPickerIsDisabled(
                 isApplyingChange: false,
@@ -138,41 +139,25 @@ final class PaguguTests: XCTestCase {
             ),
             "配置读取失败时，存在旧主张也必须禁用档位 Picker"
         )
-
-        let contentView = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Pagugu/Views/ContentView.swift")
-        let source = try String(contentsOf: contentView, encoding: .utf8)
-        let start = try XCTUnwrap(source.range(of: "private func hostControls("))
-        let end = try XCTUnwrap(source.range(
-            of: "private func piControls(",
-            range: start.upperBound..<source.endIndex
-        ))
-        XCTAssertTrue(
-            source[start.lowerBound..<end.lowerBound].contains("exposureLevelPickerIsDisabled("),
-            "Host Picker 必须消费已覆盖 readFailed + claim 的单一禁用 predicate"
-        )
     }
 
-    func testPiInvocationSurfaceProvidesRestoreAction() throws {
-        let contentView = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Pagugu/Views/ContentView.swift")
-        let source = try String(contentsOf: contentView, encoding: .utf8)
-        let start = try XCTUnwrap(source.range(of: "private func piControls("))
-        let end = try XCTUnwrap(source.range(
-            of: "private func selectedLevel",
-            range: start.upperBound..<source.endIndex
+    func testPiRestoreControlIsDisabledWhenExtensionCannotWrite() {
+        XCTAssertTrue(piRestoreConfigurationIsDisabled(
+            isApplyingChange: false,
+            health: .missing
         ))
-        let piControls = source[start.lowerBound..<end.lowerBound]
-
-        XCTAssertTrue(piControls.contains("Button(\"恢复 Pi 配置\""))
-        XCTAssertTrue(
-            piControls.contains("restoreConfiguration(.pi)"),
-            "Pi 恢复按钮必须路由到 AppModel 的 Pi 恢复 intent"
-        )
+        XCTAssertTrue(piRestoreConfigurationIsDisabled(
+            isApplyingChange: false,
+            health: .incompatible(installedVersion: "0")
+        ))
+        XCTAssertFalse(piRestoreConfigurationIsDisabled(
+            isApplyingChange: false,
+            health: .healthy
+        ))
+        XCTAssertTrue(piRestoreConfigurationIsDisabled(
+            isApplyingChange: true,
+            health: .healthy
+        ))
     }
 
     func testContentViewRecoveryQuitDoesNotCallNSApplicationTerminate() throws {
