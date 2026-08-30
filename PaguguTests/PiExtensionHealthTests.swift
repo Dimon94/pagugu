@@ -57,6 +57,27 @@ final class PiExtensionHealthTests: XCTestCase {
     }
 
     @MainActor
+    func testPiVisibilityCanRestoreConfigurationThatDidNotExistBeforePaguguWrite() async throws {
+        let manager = PiExtensionManager(homeDirectory: homeDirectory, sourceURL: sourceURL)
+        XCTAssertTrue(try manager.installOrUpdate())
+        let model = try await makeStartedModel(extensionManager: manager)
+        let skill = try XCTUnwrap(model.readModel.sources.first?.skills.first)
+
+        let changed = await model.setPiExposureLevel(.explicitOnly, for: skill.id)
+        XCTAssertTrue(changed)
+        XCTAssertTrue(fileManager.fileExists(atPath: configurationURL.path))
+
+        let restored = await model.restorePiConfiguration()
+
+        XCTAssertTrue(restored)
+        XCTAssertFalse(
+            fileManager.fileExists(atPath: configurationURL.path),
+            "Pi 恢复必须回到 Pagugu 写入前文件不存在的状态"
+        )
+        XCTAssertTrue(model.piReloadRequired)
+    }
+
+    @MainActor
     func testIncompatibleExtensionDisablesWritesAndCanBeUpgradedIdempotently() async throws {
         try fileManager.createDirectory(
             at: installationURL.deletingLastPathComponent(),

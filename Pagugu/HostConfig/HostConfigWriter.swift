@@ -2,7 +2,7 @@ import Foundation
 
 // L3 COORD: Pagugu/HostConfig/HostConfigWriter.swift
 // INPUT: 宿主配置路径、Pagugu-owned 局部字节变换；JSON 通道另接收非空 key path、目标值或删除意图。
-// OUTPUT: 提交前漂移拒绝、原子替换、单动作多文件 `<file>.pagugu-backup` 快照备份与恢复；JSON key-path 合并和实时分歧派生。
+// OUTPUT: 提交前漂移拒绝、原子替换、单动作多文件 `<file>.pagugu-backup` 快照/缺失标记备份与恢复；JSON key-path 合并和实时分歧派生。
 // POS: HostConfig 模块的通用文件提交机制与 JSON 写通道。does not own TOML/YAML 协议、具体宿主档位映射、Visibility Claim、UI 或监听。
 // TEST: repo://PaguguTests/HostConfigWriterTests.swift。
 
@@ -140,7 +140,7 @@ struct HostConfigWriter: Sendable {
     }
 
     /// L4 IN: keyPath 必须非空且每段非空；value 为 nil 表示只删除该叶子 key。
-    /// OUT: 写入前把原文件完整字节覆盖到固定单槽备份；随后原子替换目标文件。未知 JSON 值保持语义不变。
+    /// OUT: 写入前把原文件完整字节或「原本不存在」状态覆盖到固定单槽备份；随后原子替换目标文件。未知 JSON 值保持语义不变。
     /// FAIL: 原文件不可读、JSON 非对象、路径中间值非对象、备份或目标写失败时动作明确失败；备份失败时目标不写；提交前磁盘漂移时不备份、不覆写。
     /// L6 CHAIN: 实时读取并解析完整对象 → 只变更目标叶子 → 完整编码 → 提交前重读比对 → 原子覆盖单槽备份 → 原子替换目标。
     func merge(
@@ -216,9 +216,14 @@ struct HostConfigWriter: Sendable {
             }
         }
         for snapshot in snapshots {
-            guard let originalBytes = snapshot.originalBytes else { continue }
             try ensureParentDirectory(of: snapshot.url)
-            try writeAtomically(originalBytes, to: backupURL(for: snapshot.url))
+            if let originalBytes = snapshot.originalBytes {
+                try writeAtomically(originalBytes, to: backupURL(for: snapshot.url))
+                try removeIfPresent(at: missingBackupMarkerURL(for: snapshot.url))
+            } else {
+                try writeAtomically(Data(), to: missingBackupMarkerURL(for: snapshot.url))
+                try removeIfPresent(at: backupURL(for: snapshot.url))
+            }
         }
         for rewrite in rewrites {
             try ensureParentDirectory(of: rewrite.url)
@@ -226,27 +231,37 @@ struct HostConfigWriter: Sendable {
         }
     }
 
-    /// L4 OUT: 将固定单槽备份的完整字节原子覆盖回目标文件；备份本身保留。
-    /// FAIL: 缺少备份时零副作用；读取或覆盖失败时返回稳定错误与恢复方向。
+    /// L4 OUT: 将固定单槽备份的完整字节原子覆盖回目标文件；缺失标记则删除 Pagugu 创建的目标。备份状态保留。
+    /// FAIL: 缺少备份状态时零副作用；读取、覆盖或删除失败时返回稳定错误与恢复方向。
     func restoreBackup(for configurationURL: URL) throws {
         try restoreBackups(for: [configurationURL])
     }
 
-    /// L4 OUT: 一次动作恢复全部现存单槽备份；没有任何备份时明确失败。每个目标都用原子替换，备份保留。
+    /// L4 OUT: 一次动作恢复全部现存单槽备份；没有任何备份状态时明确失败。目标原子覆盖或删除，备份状态保留。
     func restoreBackups(for configurationURLs: [URL]) throws {
         let uniqueURLs = Array(Set(configurationURLs)).sorted { $0.path < $1.path }
-        let restorable = try uniqueURLs.compactMap { configurationURL -> (URL, Data)? in
-            guard let bytes = try readBytesIfPresent(at: backupURL(for: configurationURL)) else {
-                return nil
+        let restorable = try uniqueURLs.compactMap { configurationURL -> ConfigurationBackup? in
+            let hasMissingMarker = FileManager.default.fileExists(
+                atPath: missingBackupMarkerURL(for: configurationURL).path
+            )
+            let backupBytes = try readBytesIfPresent(at: backupURL(for: configurationURL))
+            guard !(hasMissingMarker && backupBytes != nil) else {
+                throw HostConfigWriterError.fileOperationFailed
             }
-            return (configurationURL, bytes)
+            if hasMissingMarker { return .missing(configurationURL) }
+            return backupBytes.map { .bytes(configurationURL, $0) }
         }
         guard !restorable.isEmpty else {
             throw HostConfigWriterError.backupUnavailable
         }
-        for (configurationURL, bytes) in restorable {
-            try ensureParentDirectory(of: configurationURL)
-            try writeAtomically(bytes, to: configurationURL)
+        for backup in restorable {
+            switch backup {
+            case .bytes(let configurationURL, let bytes):
+                try ensureParentDirectory(of: configurationURL)
+                try writeAtomically(bytes, to: configurationURL)
+            case .missing(let configurationURL):
+                try removeIfPresent(at: configurationURL)
+            }
         }
     }
 
@@ -271,6 +286,11 @@ struct HostConfigWriter: Sendable {
     private struct ConfigurationRewrite {
         let url: URL
         let updatedBytes: Data
+    }
+
+    private enum ConfigurationBackup {
+        case bytes(URL, Data)
+        case missing(URL)
     }
 
     private func validate(_ keyPath: [String]) throws {
@@ -354,7 +374,20 @@ struct HostConfigWriter: Sendable {
         }
     }
 
+    private func removeIfPresent(at url: URL) throws {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch {
+            throw HostConfigWriterError.fileOperationFailed
+        }
+    }
+
     private func backupURL(for configurationURL: URL) -> URL {
         configurationURL.appendingPathExtension("pagugu-backup")
+    }
+
+    private func missingBackupMarkerURL(for configurationURL: URL) -> URL {
+        configurationURL.appendingPathExtension("pagugu-backup-missing")
     }
 }

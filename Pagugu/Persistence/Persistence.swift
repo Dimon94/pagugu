@@ -3,9 +3,9 @@ import Foundation
 
 // L3 COORD: Pagugu/Persistence/Persistence.swift
 // INPUT: Application Support 目录或测试注入目录中的 registry.json 与 audit-history.json。
-// OUTPUT: RegistryDocument 当前主张、阻断式 RegistryRecovery，或 fail-open AuditDocument。
+// OUTPUT: RegistryDocument 当前主张、带迁移 commit-time 漂移保护的阻断式 RegistryRecovery，或 fail-open AuditDocument。
 // POS: Persistence 物理 owner。依赖 Foundation/Darwin 与 HostProfile canonical 值/支持矩阵，不拥有主张语义。
-// TEST: repo://PaguguTests/PersistenceTests.swift、repo://PaguguTests/CheckRunTests.swift。
+// TEST: repo://PaguguTests/PersistenceTests.swift、repo://PaguguTests/RegistryV2Tests.swift、repo://PaguguTests/CheckRunTests.swift。
 
 // L5 PARAM: Registry schemaVersion 只接受 JSON 整数字面量 1 或 2；v1 仅用于严格迁移，当前写入固定为 2；
 // Audit schemaVersion 当前只接受 1；Audit FIFO 上限 200。
@@ -788,8 +788,8 @@ actor Persistence {
     }
 
     // L6 DOC: repo://docs/adr/0008-app-registry-persistence-contract.md §8。
-    // CHAIN: 严格解码并校验完整 v1 → 纯转换为 v2 → durable 保留迁移前字节 → durable 替换 registry.json → 发布 v2。
-    // FAIL: 校验失败走损坏 quarantine；备份或替换失败保持原 registry.json，不发布迁移结果并进入 writeFailed 受限模式。
+    // CHAIN: 严格解码并校验完整 v1 → 纯转换为 v2 → durable 保留迁移前字节 → commit 前重读并比对原字节 → durable 替换 registry.json → 发布 v2。
+    // FAIL: 校验失败走损坏 quarantine；外部漂移保持其字节并进入 externallyModified；备份或替换失败不发布迁移结果并进入 writeFailed。
     private func migrateV1Registry(_ bytes: Data) -> RegistryLoadResult {
         let document: RegistryDocument
         do {
@@ -807,13 +807,24 @@ actor Persistence {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let migratedBytes: Data
         do {
-            let migratedBytes = try encoder.encode(document)
+            migratedBytes = try encoder.encode(document)
             try ensureDirectory()
             let backupURL = preMigrationBackupURL(fromVersion: 1)
             try writeDurably(bytes, to: backupURL)
-            try writeDurably(migratedBytes, to: registryURL)
+            try writeDurably(
+                migratedBytes,
+                to: registryURL,
+                expectedDestinationBytes: bytes
+            )
             return remember(.ready(document), bytes: migratedBytes)
+        } catch is DestinationChangedSinceRead {
+            let currentBytes = try? Data(contentsOf: registryURL)
+            return remember(
+                .restricted(RegistryRecovery(kind: .externallyModified, evidenceURL: registryURL)),
+                bytes: currentBytes
+            )
         } catch {
             return remember(
                 .restricted(RegistryRecovery(kind: .writeFailed, evidenceURL: registryURL)),
@@ -960,9 +971,13 @@ actor Persistence {
         }
     }
 
-    /// L6 CHAIN: 同目录临时文件 → 完整写入 → fsync 文件 → rename → fsync 目录。
-    /// Registry 与 Audit 必须复用本函数，不得另建写路径。
-    private func writeDurably(_ data: Data, to destinationURL: URL) throws {
+    /// L6 CHAIN: 同目录临时文件 → 完整写入 → fsync 文件 → 可选 commit-time 目标字节比对 → rename → fsync 目录。
+    /// Registry 与 Audit 必须复用本函数，不得另建写路径；迁移替换通过 expectedDestinationBytes 拒绝外部漂移。
+    private func writeDurably(
+        _ data: Data,
+        to destinationURL: URL,
+        expectedDestinationBytes: Data? = nil
+    ) throws {
         let temporaryURL = directoryURL.appendingPathComponent(
             ".\(destinationURL.lastPathComponent).\(UUID().uuidString).tmp"
         )
@@ -1005,6 +1020,14 @@ actor Persistence {
         descriptor = -1
 
         try beforeAtomicReplace()
+        if let expectedDestinationBytes {
+            let currentDestinationBytes = FileManager.default.fileExists(atPath: destinationURL.path)
+                ? try Data(contentsOf: destinationURL)
+                : nil
+            guard currentDestinationBytes == Optional(expectedDestinationBytes) else {
+                throw DestinationChangedSinceRead()
+            }
+        }
         guard rename(temporaryURL.path, destinationURL.path) == 0 else {
             throw POSIXFailure(code: errno)
         }
@@ -1019,6 +1042,8 @@ actor Persistence {
         }
     }
 }
+
+private struct DestinationChangedSinceRead: Error {}
 
 private struct POSIXFailure: Error {
     let code: Int32

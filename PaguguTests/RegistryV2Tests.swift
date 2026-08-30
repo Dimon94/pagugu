@@ -97,6 +97,32 @@ final class RegistryV2Tests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: XCTUnwrap(migrationBackups.first)), v1Bytes)
     }
 
+    func testV1MigrationFailsClosedWhenRegistryChangesBeforeMigrationWrite() async throws {
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let registryURL = directoryURL.appendingPathComponent("registry.json")
+        let v1Bytes = Data(
+            #"{"schemaVersion":1,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{}}"#.utf8
+        )
+        let externalBytes = Data(#"{"externalEdit":"must remain"}"#.utf8)
+        try v1Bytes.write(to: registryURL)
+        let persistence = Persistence(directoryURL: directoryURL) {
+            try externalBytes.write(to: registryURL)
+        }
+
+        let result = await persistence.loadRegistry()
+
+        guard case .restricted(let recovery) = result else {
+            return XCTFail("迁移写入前发生外部漂移时必须进入受限恢复模式")
+        }
+        XCTAssertEqual(recovery.kind, .externallyModified)
+        XCTAssertEqual(recovery.evidenceURL, registryURL)
+        XCTAssertEqual(
+            try Data(contentsOf: registryURL),
+            externalBytes,
+            "迁移不得覆写外部修改"
+        )
+    }
+
     func testUnknownFutureVersionIsNeverOverwritten() async throws {
         try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         let registryURL = directoryURL.appendingPathComponent("registry.json")

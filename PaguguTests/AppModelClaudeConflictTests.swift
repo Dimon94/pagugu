@@ -88,6 +88,53 @@ final class AppModelClaudeConflictTests: XCTestCase {
     }
 
     @MainActor
+    func testProjectOverrideMakesUserLevelWriteFailInsteadOfReturningFalseSuccess() async throws {
+        let repository = temporaryDirectory.appendingPathComponent("project-repository")
+        let projectSkill = repository.appendingPathComponent(".claude/skills/helper")
+        try fileManager.createDirectory(
+            at: repository.appendingPathComponent(".git"),
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(at: projectSkill, withIntermediateDirectories: true)
+        try "---\nname: helper\ndescription: Project Test\n---\n".write(
+            to: projectSkill.appendingPathComponent("SKILL.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try #"{"skillOverrides":{"helper":"off"}}"#.write(
+            to: repository.appendingPathComponent(".claude/settings.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try writeConfiguration(#"{"theme":"dark"}"#)
+        let model = AppModel(
+            personalRoots: [],
+            persistence: Persistence(directoryURL: dataDirectory),
+            hostConfigReader: HostConfigReader(homeDirectory: homeDirectory),
+            claudeConfigWriter: ClaudeConfigWriter(homeDirectory: homeDirectory)
+        )
+        await model.start()
+        await model.addProjectScanRoot(repository)
+        let skill = try XCTUnwrap(model.readModel.sources.first?.skills.first)
+
+        let changed = await model.setClaudeExposureLevel(.fullyExposed, for: skill.id)
+
+        XCTAssertFalse(changed, "项目级 override 遮蔽用户写入时不得返回成功")
+        XCTAssertEqual(
+            model.visibilityClaimError,
+            .hostConfiguration(.effectiveConfigurationMismatch)
+        )
+        XCTAssertEqual(try overrideValue(for: "helper"), "on")
+        assertClaudeSurface(
+            in: model,
+            skillIdentity: skill.id,
+            current: .fullyDisabled,
+            claim: .fullyExposed,
+            hasDivergence: true
+        )
+    }
+
+    @MainActor
     func testSameClaudeNameAcrossDifferentIdentitiesFailsClosed() async throws {
         let claudeRoot = homeDirectory.appendingPathComponent(".claude/skills")
         for (repositoryName, installationName) in [("first", "first-install"), ("second", "second-install")] {

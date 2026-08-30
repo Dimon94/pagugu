@@ -37,13 +37,21 @@ final class ClaudeConfigWriterTests: XCTestCase {
             (.fullyDisabled, "off"),
         ]
         for (level, rawValue) in mappings {
-            try writer.apply(exposureLevel: level, forSkillNamed: "helper")
+            try writer.apply(
+                exposureLevel: level,
+                forSkillNamed: "helper",
+                installations: [installation()]
+            )
             XCTAssertEqual(try overrideValue(for: "helper"), rawValue)
             XCTAssertEqual(try topLevelValue(for: "theme") as? String, "dark")
         }
 
         let bytesBeforeRemoval = try Data(contentsOf: configurationURL)
-        try writer.apply(exposureLevel: nil, forSkillNamed: "helper")
+        try writer.apply(
+            exposureLevel: nil,
+            forSkillNamed: "helper",
+            installations: [installation()]
+        )
 
         XCTAssertNil(try overrideValue(for: "helper"))
         XCTAssertEqual(
@@ -56,11 +64,19 @@ final class ClaudeConfigWriterTests: XCTestCase {
     func testExternalEditProducesDivergenceAndBackupCanRestorePreviousConfiguration() throws {
         try Data(#"{"skillOverrides":{"helper":"on"}}"#.utf8).write(to: configurationURL)
         let writer = ClaudeConfigWriter(homeDirectory: homeDirectory)
-        try writer.apply(exposureLevel: .explicitOnly, forSkillNamed: "helper")
+        try writer.apply(
+            exposureLevel: .explicitOnly,
+            forSkillNamed: "helper",
+            installations: [installation()]
+        )
 
         try Data(#"{"skillOverrides":{"helper":"off"}}"#.utf8).write(to: configurationURL)
         XCTAssertEqual(
-            try writer.claimState(expecting: .explicitOnly, forSkillNamed: "helper"),
+            try writer.claimState(
+                expecting: .explicitOnly,
+                forSkillNamed: "helper",
+                installations: [installation()]
+            ),
             .divergent
         )
 
@@ -68,9 +84,25 @@ final class ClaudeConfigWriterTests: XCTestCase {
 
         XCTAssertEqual(try overrideValue(for: "helper"), "on")
         XCTAssertEqual(
-            try writer.claimState(expecting: .explicitOnly, forSkillNamed: "helper"),
+            try writer.claimState(
+                expecting: .explicitOnly,
+                forSkillNamed: "helper",
+                installations: [installation()]
+            ),
             .divergent,
             "恢复写前配置后，仍应按实时文件事实派生与当前主张的分歧"
+        )
+    }
+
+    private func installation() -> SkillInstallation {
+        let skillDirectory = homeDirectory.appendingPathComponent(".claude/skills/helper")
+        return SkillInstallation(
+            asFoundPath: skillDirectory.path,
+            canonicalPath: skillDirectory.path,
+            hosts: [.claude],
+            scope: .personal,
+            projectionType: .copy,
+            sourceMapping: nil
         )
     }
 

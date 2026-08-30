@@ -60,6 +60,26 @@ final class HostConfigWriterTests: XCTestCase {
         )
     }
 
+    func testRestoreRemovesConfigurationCreatedWhenFileWasOriginallyMissing() throws {
+        let writer = HostConfigWriter()
+        let keyPath = ["skillOverrides", "helper"]
+        XCTAssertFalse(fileManager.fileExists(atPath: configurationURL.path))
+
+        try writer.merge(.string("off"), at: keyPath, in: configurationURL)
+        XCTAssertTrue(fileManager.fileExists(atPath: configurationURL.path))
+
+        try writer.restoreBackup(for: configurationURL)
+
+        XCTAssertFalse(
+            fileManager.fileExists(atPath: configurationURL.path),
+            "恢复必须把首次写入创建的文件还原为原本不存在"
+        )
+        XCTAssertNoThrow(
+            try writer.restoreBackup(for: configurationURL),
+            "恢复槽必须保留，并继续表达写入前文件不存在"
+        )
+    }
+
     func testManualEditProducesDivergenceAgainstClaim() throws {
         try Data(#"{"skillOverrides":{"helper":"on"}}"#.utf8).write(to: configurationURL)
         let writer = HostConfigWriter()

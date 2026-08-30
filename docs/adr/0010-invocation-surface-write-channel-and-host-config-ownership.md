@@ -8,7 +8,7 @@ Related: repo://CONTEXT.md、repo://docs/adr/0002-skill-source-mapping.md、repo
 
 调用面调控要求 Pagugu 修改 Agent Host 的配置文件：Claude Code 的 settings.json（`skillOverrides`，四档：`on` / `name-only` / `user-invocable-only` / `off`，v2.1.129+）与 Codex 的用户级 `~/.codex/config.toml`（`[[skills.config]] enabled = false`，全禁用）及用户级 `~/.codex/agents/openai.yaml`（`policy.allow_implicit_invocation = false`，仅显式）。Codex 两条字段 schema 已由官方 Agent Skills 文档核实；具体用户级写入位置由后续 Ticket #55 在“不写 Skill 内容”边界内裁决。Claude `skillOverrides` 已由官方 Claude Code Skills 文档核实。写通道仍必须保持本 ADR 的结构化合并与保全约束。
 
-宿主配置文件是共享所有权：用户会手改，宿主自己会重写。Pagugu 的可见性主张与文件事实可能分歧。需要裁决写入方式、原始配置保全、恢复能力与冲突语义。Pi 侧不写宿主配置，见 repo://docs/adr/0011-pagugu-owned-pi-extension.md。
+宿主配置文件是共享所有权：用户会手改，宿主自己会重写。Pagugu 的可见性主张与文件事实可能分歧。需要裁决写入方式、原始配置保全、恢复能力与冲突语义。Pi 侧不写宿主配置；其 Pagugu 独占可见性文件仍复用本 ADR 的通用备份/恢复原语，见 repo://docs/adr/0011-pagugu-owned-pi-extension.md。
 
 ## Decision
 
@@ -18,15 +18,15 @@ Pagugu 只增删自己负责的 key（如 `skillOverrides` 中由 Pagugu 写入�
 
 ### 2. 单槽备份与单动作恢复
 
-每次写入前把目标文件完整字节原子覆盖到 `<file>.pagugu-backup`（每文件只保留最近一份），再原子替换目标。恢复底层入口把该备份完整覆盖回目标文件并保留备份本身；每个宿主配置后续提供一个「恢复到 Pagugu 写入前」的 UI 动作，不做备份列表浏览与逐快照挑选。初步版本刻意从简；未来扩为多份 FIFO 是纯加法，不破坏合同。
+每次写入前把目标原始状态写入单槽：文件存在时把完整字节原子覆盖到 `<file>.pagugu-backup`；文件不存在时写 `<file>.pagugu-backup-missing` 标记，并清除另一种槽状态。随后才原子替换目标。恢复底层入口把字节备份完整覆盖回目标，或按缺失标记删除由 Pagugu 创建的目标文件；两种备份状态都保留。每个宿主配置与 Pagugu 独占 Pi 可见性文件都提供一个「恢复到 Pagugu 写入前」的 UI 动作，不做备份列表浏览与逐快照挑选。初步版本刻意从简；未来扩为多份 FIFO 是纯加法，不破坏合同。
 
 ### 3. 文件事实优先，分歧只呈现不覆盖
 
-可见性主张与文件事实分歧时（用户手改或宿主重写导致），Pagugu 检测并呈现「主张与当前配置不一致」，不静默覆盖、不自动重应用。用户显式选择「重新应用主张」或「放弃主张」。失效语义复用 ADR-0002 失效映射：事实优先、标注保留、不静默删除。被否决：主张优先自动写回（与用户和宿主抢文件）；后写者赢（UI 呈现假状态）。与 Registry 外部修改检测、审计「永不充当自动恢复依据」同构。
+可见性主张与有效文件事实分歧时（用户手改、宿主重写或更高优先级配置遮蔽导致），Pagugu 检测并呈现「主张与当前配置不一致」，不静默覆盖、不自动重应用。Adapter 写入后必须经同一 Reader 重读完整优先级事实；例如 Claude 用户级写入被项目级同名 override 遮蔽时明确失败，不返回假成功。用户显式选择「重新应用主张」或「放弃主张」。失效语义复用 ADR-0002 失效映射：事实优先、标注保留、不静默删除。被否决：主张优先自动写回（与用户和宿主抢文件）；后写者赢（UI 呈现假状态）。与 Registry 外部修改检测、审计「永不充当自动恢复依据」同构。
 
 ### 4. 能力缺口 fail closed
 
-宿主不支持某调用面档位时，该档写入口禁用并标注原因（如 Codex 与 Pi 不支持「降级曝光」）；Registry mutation 与 v2 schema 校验也拒绝不受支持的主张，绝不静默降级为其他档位（如用「全禁用」冒充「仅显式」）。当前 Host Profile：Claude Code 支持四档；Codex 支持完全暴露、仅显式、全禁用；ADR-0011 spike 已验证 Pi 扩展可阻断显式调用，因此 Pi 支持完全暴露、仅显式、全禁用，只不支持降级曝光。
+宿主不支持某调用面档位时，该档写入口禁用并标注原因（如 Codex 与 Pi 不支持「降级曝光」）；配置读取失败时该宿主全部档位写入口禁用，即使 Registry 留有旧主张。Registry mutation 与 v2 schema 校验也拒绝不受支持的主张，绝不静默降级为其他档位（如用「全禁用」冒充「仅显式」）。当前 Host Profile：Claude Code 支持四档；Codex 支持完全暴露、仅显式、全禁用；ADR-0011 spike 已验证 Pi 扩展可阻断显式调用，因此 Pi 支持完全暴露、仅显式、全禁用，只不支持降级曝光。
 
 ### 5. 可见性主张是 App Registry 的第四类 owns
 
@@ -45,11 +45,11 @@ Pagugu 只增删自己负责的 key（如 `skillOverrides` 中由 Pagugu 写入�
 
 ### 负面 / 成本
 
-- Pagugu 首次获得对宿主配置的写 seam；通用 JSON 核心集中合并写、备份、恢复与分歧检测，具体宿主 adapter 仍需提供档位映射。
+- Pagugu 首次获得对宿主配置的写 seam；通用 JSON 核心集中合并写、存在/缺失状态备份、恢复与分歧检测，具体宿主 adapter 仍需提供档位映射和完整有效事实校验。
 - Registry 已升级至 v2 并提供严格 v1→v2 迁移；ADR-0008 的未知未来版本不覆写原则不变。
 
 ### 边界
 
-- 本 ADR 冻结：合并写底线、`<file>.pagugu-backup` 单槽备份与单动作恢复、文件事实优先、能力缺口 fail closed、Registry 第四类 owns、不写 Skill 内容。
+- 本 ADR 冻结：合并写底线、以 `<file>.pagugu-backup` / `<file>.pagugu-backup-missing` 表达原字节或缺失状态的单槽备份与单动作恢复、完整有效文件事实优先、能力缺口与读取失败 fail closed、Registry 第四类 owns、不写 Skill 内容。
 - 不裁决：UI 形态，以及 Claude/Codex/Pi 的具体档位映射与非 JSON 格式保全实现（归后续票据）。
 - 宿主未来变更配置 schema 时立新 ADR supersede 本记录；写通道必须基于实现时的官方合同继续核实保格式修改边界。

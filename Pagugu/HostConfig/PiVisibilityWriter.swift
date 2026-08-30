@@ -2,7 +2,7 @@ import Foundation
 
 // L3 COORD: Pagugu/HostConfig/PiVisibilityWriter.swift
 // INPUT: Pi Skill name、三档 Exposure Level 与 Pagugu 独占的 ~/.pi/agent/pagugu/visibility.json。
-// OUTPUT: hiddenSkills / disabledSkills 的类型化原子写入；文件本身是 Pi 可见性主张的 canonical。
+// OUTPUT: hiddenSkills / disabledSkills 的类型化原子写入，以及复用通用单槽备份的恢复；文件本身是 Pi 可见性主张的 canonical。
 // POS: HostConfig 模块的 Pi 独占配置 adapter。does not own 扩展安装、Registry Claim、UI 或 Pi settings.json。
 // TEST: repo://PaguguTests/PiVisibilityWriterTests.swift、repo://PaguguTests/HostConfigReaderTests.swift。
 
@@ -48,67 +48,62 @@ enum PiVisibilityWriterError: Error, Equatable, Sendable {
     }
 }
 
-/// 独占配置只有 Pagugu 一个写者，因此直接类型化读改写，不引入共享宿主配置的漂移与备份协议。
+/// 独占配置只有 Pagugu 一个写者；档位协议仍由本 adapter 拥有，文件提交、备份与恢复复用 HostConfigWriter。
 struct PiVisibilityWriter: Sendable {
     private let configurationURL: URL
+    private let writer: HostConfigWriter
 
-    init(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) {
+    init(
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        writer: HostConfigWriter = HostConfigWriter()
+    ) {
         configurationURL = homeDirectory.standardizedFileURL
             .appendingPathComponent(".pi/agent/pagugu/visibility.json")
+        self.writer = writer
     }
 
     /// L4 IN: skillName 非空；只接受 Pi 支持的三档，nameOnly 必须 fail closed。
-    /// OUT: 原子替换独占 JSON；同一 Skill 只进入 hiddenSkills 或 disabledSkills 一个集合。
-    /// FAIL: 已存在文件损坏时保留原字节并返回修复方向；目录或原子写失败不冒充成功。
+    /// OUT: 经通用写通道备份并原子替换独占 JSON；同一 Skill 只进入 hiddenSkills 或 disabledSkills 一个集合。
+    /// FAIL: 已存在文件损坏时保留原字节并返回修复方向；漂移、备份或原子写失败不冒充成功。
     func apply(exposureLevel: ExposureLevel, forSkillNamed skillName: String) throws {
         guard !skillName.isEmpty else { throw PiVisibilityWriterError.invalidSkillName }
-        var document = try readDocument()
-        var hiddenSkills = Set(document.hiddenSkills)
-        var disabledSkills = Set(document.disabledSkills)
-        hiddenSkills.remove(skillName)
-        disabledSkills.remove(skillName)
+        try writer.rewriteConfiguration(at: configurationURL) { originalBytes in
+            var document = try readDocument(from: originalBytes)
+            var hiddenSkills = Set(document.hiddenSkills)
+            var disabledSkills = Set(document.disabledSkills)
+            hiddenSkills.remove(skillName)
+            disabledSkills.remove(skillName)
 
-        switch exposureLevel {
-        case .fullyExposed:
-            break
-        case .explicitOnly:
-            hiddenSkills.insert(skillName)
-        case .fullyDisabled:
-            disabledSkills.insert(skillName)
-        case .nameOnly:
-            throw PiVisibilityWriterError.unsupportedExposureLevel
-        }
+            switch exposureLevel {
+            case .fullyExposed:
+                break
+            case .explicitOnly:
+                hiddenSkills.insert(skillName)
+            case .fullyDisabled:
+                disabledSkills.insert(skillName)
+            case .nameOnly:
+                throw PiVisibilityWriterError.unsupportedExposureLevel
+            }
 
-        document.hiddenSkills = hiddenSkills.sorted()
-        document.disabledSkills = disabledSkills.sorted()
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let bytes: Data
-        do {
-            bytes = try encoder.encode(document)
-        } catch {
-            throw PiVisibilityWriterError.invalidConfiguration
-        }
-
-        do {
-            try FileManager.default.createDirectory(
-                at: configurationURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            try bytes.write(to: configurationURL, options: .atomic)
-        } catch {
-            throw PiVisibilityWriterError.fileOperationFailed
+            document.hiddenSkills = hiddenSkills.sorted()
+            document.disabledSkills = disabledSkills.sorted()
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            do {
+                return try encoder.encode(document)
+            } catch {
+                throw PiVisibilityWriterError.invalidConfiguration
+            }
         }
     }
 
-    private func readDocument() throws -> PiVisibilityDocument {
-        guard FileManager.default.fileExists(atPath: configurationURL.path) else { return .empty }
-        let bytes: Data
-        do {
-            bytes = try Data(contentsOf: configurationURL)
-        } catch {
-            throw PiVisibilityWriterError.fileOperationFailed
-        }
+    /// 恢复最近一次 Pagugu 写入 Pi 独占配置前的完整字节或「原本不存在」状态；备份状态保留。
+    func restoreConfiguration() throws {
+        try writer.restoreBackup(for: configurationURL)
+    }
+
+    private func readDocument(from bytes: Data?) throws -> PiVisibilityDocument {
+        guard let bytes else { return .empty }
         do {
             let document = try JSONDecoder().decode(PiVisibilityDocument.self, from: bytes)
             guard document.isValid else { throw PiVisibilityWriterError.invalidConfiguration }

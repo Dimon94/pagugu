@@ -82,7 +82,7 @@ Scan Result 本体、Skill Read Model、Git Fact、Checkout Git State、Eligible
 
 ### 8. 迁移语义
 
-v1 → v2 是唯一已知迁移：先按 v1 合同完整严格校验三类集合，在内存中纯转换并加入空 `visibilityClaims`，把原字节 durable 保留为 `registry.v1.pre-migration-<timestamp>.json`，再原子替换写入 v2；既有 Project Scan Root、来源映射与 Checkout Observation 全部保持。备份或替换任一步失败即 fail closed，不发布迁移后内存投影，原 registry.json 保持 last-good。每对版本转换必须是显式、独立测试的纯函数；未来新增转换按同一顺序实现。被否决：通用 migration framework（当前只有一对版本转换）。
+v1 → v2 是唯一已知迁移：先按 v1 合同完整严格校验三类集合，在内存中纯转换并加入空 `visibilityClaims`，把原字节 durable 保留为 `registry.v1.pre-migration-<timestamp>.json`；替换 `registry.json` 的 commit-time 必须重读目标并与最初 v1 字节比对，未漂移才原子写入 v2。既有 Project Scan Root、来源映射与 Checkout Observation 全部保持。检测到漂移时保留外部字节，进入 `externallyModified` 受限恢复；备份或替换失败同样 fail closed；两类失败都不发布迁移后内存投影。每对版本转换必须是显式、独立测试的纯函数；未来新增转换按同一顺序实现。被否决：通用 migration framework（当前只有一对版本转换）。
 
 ### 9. 损坏恢复：fail closed + quarantine
 
@@ -90,11 +90,11 @@ Registry 是安全关键当前主张，不适用审计的 fail-open 丢弃。不
 
 ### 10. 原子写与 durable success
 
-写路径固定：同目录唯一临时文件 → 完整编码 → 写入并 fsync 文件 → 原子 rename 到目标 → fsync 目录。写成功的最小可观察条件 = rename 完成且文件与目录 fsync 成功。不做常规读回校验（rename 加双 fsync 已是最小充分条件）。写频率是用户动作级，双 fsync 成本可忽略。
+写路径固定：同目录唯一临时文件 → 完整编码 → 写入并 fsync 文件 → 可选 commit-time 目标字节比对 → 原子 rename 到目标 → fsync 目录。v1→v2 迁移必须启用该比对，其他写入按 §11 的动作前比对。写成功的最小可观察条件 = 必需的比对通过、rename 完成且文件与目录 fsync 成功。不做写后常规读回校验（rename 加双 fsync 已是最小充分条件）。写频率是用户动作级，双 fsync 成本可忽略。
 
 ### 11. 单写者与并发
 
-App 内单一内存 owner 串行执行全部 mutation（设置改动、观察落槽、重置），多窗口共享同一 owner；模块形状归 #9。run 侧互斥已由 ADR-0005 §9 与 ADR-0006 §7 覆盖，写侧由 owner 串行覆盖。第二实例与外部编辑检测：每次写前比对磁盘内容与本进程上次读/写的已知字节，不一致即 fail closed——动作失败，恢复动作是重启 App 重载或显式重置。不引入文件锁（advisory 锁挡不住编辑器，锁不是真相，与 ADR-0006 §7 同哲学）、文件 watcher 或跨进程分布式锁。
+App 内单一内存 owner 串行执行全部 mutation（设置改动、观察落槽、重置），多窗口共享同一 owner；模块形状归 #9。run 侧互斥已由 ADR-0005 §9 与 ADR-0006 §7 覆盖，写侧由 owner 串行覆盖。第二实例与外部编辑检测：每次常规写前比对磁盘内容与本进程上次读/写的已知字节；迁移在最终 rename 前再次比对最初 v1 字节。不一致即 fail closed——动作失败，恢复动作是重启 App 重载或显式重置。不引入文件锁（advisory 锁挡不住编辑器，锁不是真相，与 ADR-0006 §7 同哲学）、文件 watcher 或跨进程分布式锁。
 
 ### 12. 写失败语义
 

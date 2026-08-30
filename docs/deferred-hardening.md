@@ -28,3 +28,4 @@
 | 2026-08-30 | 无新增 | — | 本次落地 Claude Code 四档切换、主张分歧解决与单槽配置恢复，未发现需延后加固的问题。 | repo://Pagugu/HostConfig/ClaudeConfigWriter.swift、repo://Pagugu/AppModel/AppModel.swift、repo://Pagugu/Views/ContentView.swift | — | — |
 | 2026-08-30 | 无新增 | — | 本次落地 Codex TOML/YAML 行级保格式三档写入、逐文件备份恢复与冲突解决，未发现需延后加固的问题。 | repo://Pagugu/HostConfig/CodexConfigWriter.swift、repo://PaguguTests/CodexConfigWriterTests.swift、repo://PaguguTests/AppModelCodexTests.swift | — | — |
 | 2026-08-30 | 无新增 | — | 本次落地 Pagugu 自带 Pi 扩展、独占配置三档原子写、扩展健康/幂等升级与 reload 提示，未发现需延后加固的问题。 | repo://Pagugu/PiExtension、repo://Pagugu/HostConfig/PiVisibilityWriter.swift、repo://PaguguTests/PiExtensionHealthTests.swift | — | — |
+| 2026-08-30 | 无新增 | — | 本次修复调用面备份恢复、Claude 完整事实校验、读取失败写入护栏与 Registry 迁移漂移检测，未发现需延后加固的问题。 | repo://Pagugu/HostConfig、repo://Pagugu/Persistence/Persistence.swift、repo://Pagugu/Views/ContentView.swift | — | — |

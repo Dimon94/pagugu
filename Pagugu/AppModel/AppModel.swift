@@ -3,8 +3,8 @@ import Foundation
 // L3 COORD: Pagugu/AppModel/AppModel.swift
 // OUTPUT: AppModel UI intent/只读投影，以及只供 composition root 注入的 RegistryResetting reset seam。
 // POS: AppModel 模块（ADR-0009 §7）。@MainActor composition root：
-//      owns Skill Read Model、受限恢复/来源映射/调用面动作错误投影、Claude Code/Codex 主张动作顺序编排、
-//      Pi 扩展健康/安装升级与三档独占配置写入编排、reload 提示、目录收起、Check/Update 瞬态、
+//      owns Skill Read Model、受限恢复/来源映射/调用面动作错误投影、Claude Code/Codex 主张动作顺序编排；
+//      Claude 写后校验用户级与项目级完整事实；Pi 扩展健康/安装升级与三档独占配置写入/恢复编排、reload 提示、目录收起、Check/Update 瞬态、
 //      全部 UI intent 与启动/刷新编排；每次发布重读 HostConfig 调用面事实，
 //      合并 Registry Claim 派生分歧，并按实时 Git 事实重推导观察 freshness。
 //      取消确认或更新失败后，目标检出
@@ -17,7 +17,7 @@ import Foundation
 //      目录投影与 intent 路由 smoke、审计呈现投影）；repo://PaguguTests/AppModelSurfaceTests.swift（调用面事实）；
 //      repo://PaguguTests/AppModelClaudeConflictTests.swift（Claude 主张与冲突解决）；
 //      repo://PaguguTests/AppModelCodexTests.swift（Codex 三档、分歧解决、恢复与失败）；
-//      repo://PaguguTests/PiExtensionHealthTests.swift（Pi 扩展 fail-closed、修复、档位写入与 reload 提示）。
+//      repo://PaguguTests/PiExtensionHealthTests.swift（Pi 扩展 fail-closed、修复、档位写入/恢复与 reload 提示）。
 
 enum AppRun: Equatable, Sendable {
     case check
@@ -412,6 +412,10 @@ final class AppModel: ObservableObject {
         await restoreConfiguration(for: .codex)
     }
 
+    func restorePiConfiguration() async -> Bool {
+        await restoreConfiguration(for: .pi)
+    }
+
     func setExposureLevel(
         _ exposureLevel: ExposureLevel,
         for skillIdentity: SkillIdentity,
@@ -501,7 +505,8 @@ final class AppModel: ObservableObject {
             case .codex:
                 try codexConfigWriter.restoreConfiguration()
             case .pi:
-                throw HostConfigWriterError.unsupportedExposureLevel
+                try piVisibilityWriter.restoreConfiguration()
+                piReloadRequired = true
             }
             visibilityClaimError = nil
             await publishDiscovery()
@@ -548,6 +553,10 @@ final class AppModel: ObservableObject {
             return true
         } catch let error as PiVisibilityWriterError {
             visibilityClaimError = .piVisibility(error)
+            await publishDiscovery()
+            return false
+        } catch let error as HostConfigWriterError {
+            visibilityClaimError = .hostConfiguration(error)
             await publishDiscovery()
             return false
         } catch {
@@ -1085,7 +1094,8 @@ final class AppModel: ObservableObject {
             case .claude:
                 try claudeConfigWriter.apply(
                     exposureLevel: exposureLevel,
-                    forSkillNamed: entry.displayName
+                    forSkillNamed: entry.displayName,
+                    installations: entry.installations
                 )
             case .codex:
                 try codexConfigWriter.apply(

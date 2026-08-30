@@ -6,8 +6,8 @@ import UniformTypeIdentifiers
 //      左侧：平铺目录——来源仓库行（可收起/展开子 Skill 行，默认展开，chevron 独立热区）
 //      + 无仓库可归行（来源不明）；消费 Skill Read Model 给出的逐态短语与五档顺序；无分组标题、无筛选 UI。
 //      右侧：Skill 详情呈现同名共存组徽标与逐宿主诊断、调用面实时档位与 Unsupported 缺口；
-//      Claude Code 行提供四档、Codex 行提供三档主张切换；两者共用分歧解决与逐宿主单槽恢复；
-//      Pi 行提供三档切换、扩展修复入口与 reload 提示；
+//      Claude Code 行提供四档、Codex 行提供三档主张切换；读取失败时禁用档位写入；两者共用分歧解决与逐宿主单槽恢复；
+//      Pi 行提供三档切换、单槽恢复、扩展修复入口与 reload 提示；
 //      Unsupported segment 禁用；Codex 用户级「仅显式」标明会影响全部 Codex Skill；并呈现状态与检出、安装位置、来源标识、
 //      SKILL.md 原文只读可选中、更新动作；
 //      空选择回欢迎引导。「相关记录」经工具栏「最近活动」承载。
@@ -1264,6 +1264,17 @@ private struct NameCollisionBlock: View {
 
 // MARK: - 详情块：调用面（实时文件事实 + Claude Code/Codex 显式主张动作）
 
+// 配置读取失败时必须 fail-close。旧主张不能重新开放写入控件。
+// TEST: repo://PaguguTests/PaguguTests.swift::testFailedInvocationSurfaceReadDisablesExposureLevelWritesEvenWithClaim
+func exposureLevelPickerIsDisabled(
+    isApplyingChange: Bool,
+    surface: HostInvocationSurface
+) -> Bool {
+    guard !isApplyingChange else { return true }
+    if case .readFailed = surface.state { return true }
+    return false
+}
+
 private struct InvocationSurfaceBlock: View {
     let surfaces: [HostInvocationSurface]
     let piExtensionHealth: PiExtensionHealth?
@@ -1367,8 +1378,10 @@ private struct InvocationSurfaceBlock: View {
         }
         .pickerStyle(.segmented)
         .disabled(
-            isApplyingChange ||
-                (currentLevel(for: surface) == nil && surface.claimLevel == nil)
+            exposureLevelPickerIsDisabled(
+                isApplyingChange: isApplyingChange,
+                surface: surface
+            )
         )
 
         if let claimLevel = surface.claimLevel {
@@ -1468,6 +1481,14 @@ private struct InvocationSurfaceBlock: View {
                 .font(DesignTokens.Fonts.caption)
                 .foregroundStyle(DesignTokens.Status.warning)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+
+        if let restoreConfiguration {
+            Button("恢复 Pi 配置", systemImage: "arrow.uturn.backward") {
+                runPiAction { await restoreConfiguration(.pi) }
+            }
+            .disabled(isApplyingPiChange)
+            .help("用最近一次 Pagugu 写入前的单槽备份恢复 Pi 可见性配置。")
         }
 
         Text("切换后请在 Pi 中运行 /reload 或重启 Pi。")
