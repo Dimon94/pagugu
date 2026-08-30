@@ -47,6 +47,16 @@ struct NameCollisionGroup: Hashable, Sendable {
 }
 
 enum NameCollisionEngine {
+    /// 同名规则的 canonical normalization。写入共享 name-key 前也必须复用该规则检查歧义。
+    static func normalizedName(_ displayName: String) -> String? {
+        let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return nil }
+        return trimmedName.folding(
+            options: [.caseInsensitive],
+            locale: Locale(identifier: "en_US_POSIX")
+        )
+    }
+
     /// 基于 trim + 大小写折叠聚合；frontmatter name 缺失或空白时回退安装目录名。
     /// 只有至少两个不同 Skill 候选的名称才产出同名共存组。
     static func groups(from candidates: [NameCollisionCandidate]) -> [NameCollisionGroup] {
@@ -60,11 +70,7 @@ enum NameCollisionEngine {
                 displayName = candidate.installationDirectoryName
                     .trimmingCharacters(in: .whitespacesAndNewlines)
             }
-            guard !displayName.isEmpty else { return nil }
-            let normalizedName = displayName.folding(
-                options: [.caseInsensitive],
-                locale: Locale(identifier: "en_US_POSIX")
-            )
+            guard let normalizedName = normalizedName(displayName) else { return nil }
             return (normalizedName, displayName, candidate)
         }
 

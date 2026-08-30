@@ -5,8 +5,9 @@ import UniformTypeIdentifiers
 // POS: 主窗口内容（Variant F 主从结构，#16 落地目录 IA，#20 落地目录状态短语与静默排序，#27 接线 Update Run）。
 //      左侧：平铺目录——来源仓库行（可收起/展开子 Skill 行，默认展开，chevron 独立热区）
 //      + 无仓库可归行（来源不明）；消费 Skill Read Model 给出的逐态短语与五档顺序；无分组标题、无筛选 UI。
-//      右侧：Skill 详情呈现同名共存组徽标与逐宿主诊断、调用面实时只读档位与 Unsupported 缺口，
-//      以及状态与检出、安装位置、来源标识、SKILL.md 原文只读可选中、更新动作；
+//      右侧：Skill 详情呈现同名共存组徽标与逐宿主诊断、调用面实时档位与 Unsupported 缺口；
+//      Claude Code 行提供四档主张切换、分歧解决与单槽恢复；并呈现状态与检出、安装位置、来源标识、
+//      SKILL.md 原文只读可选中、更新动作；
 //      空选择回欢迎引导。「相关记录」经工具栏「最近活动」承载。
 //      检出卡逐检出提供「更新…」intent（仅 update-available 可用，其余禁用并给出原因）；
 //      确认页列出 Skill Identity、目标检出、branch/upstream、当前 HEAD → 精确 target SHA、behind 数、
@@ -20,7 +21,8 @@ import UniformTypeIdentifiers
 //      全部视觉常量消费 DesignTokens（repo://Pagugu/Views/DesignTokens.swift），不逐组件手写冲突值。
 //      View 只消费 Skill Read Model 与审计投影、只发 AppModel intent，不做 IO。
 // TEST: repo://PaguguTests/AppModelTests.swift（投影与 intent smoke）；
-//       repo://PaguguTests/AppModelSurfaceTests.swift（调用面只读投影）；
+//       repo://PaguguTests/AppModelSurfaceTests.swift（调用面事实投影）；
+//       repo://PaguguTests/AppModelClaudeConflictTests.swift（Claude 主张、分歧与动作结果）；
 //       repo://PaguguTests/PaguguTests.swift（ContentView 构造、确认页完整 SHA、DesignTokens、受限恢复退出不直接 terminate）。
 
 struct ContentView: View {
@@ -201,6 +203,18 @@ struct ContentView: View {
                             preselectedCheckoutPath: checkoutPath
                         )
                     },
+                    setClaudeExposureLevel: { level in
+                        _ = await model.setClaudeExposureLevel(level, for: entry.id)
+                    },
+                    reapplyClaudeClaim: {
+                        _ = await model.reapplyClaudeVisibilityClaim(for: entry.id)
+                    },
+                    adoptClaudeDiskConfiguration: {
+                        _ = await model.adoptClaudeDiskConfiguration(for: entry.id)
+                    },
+                    restoreClaudeConfiguration: {
+                        _ = await model.restoreClaudeConfiguration()
+                    },
                     deleteMapping: { path in
                         _ = await model.deleteSourceMapping(installationCanonicalPath: path)
                     }
@@ -241,7 +255,7 @@ struct ContentView: View {
     }
 }
 
-// MARK: - 结果区（六类反馈：成功、noop、取消后果、写失败、刷新失败、检查总结）
+// MARK: - 结果区（运行结果、恢复信息与调用面动作失败）
 // 信息/警示分级、可关闭；同一动作不出现第二处反馈样式。
 
 private struct ResultAreaView: View {
@@ -251,7 +265,7 @@ private struct ResultAreaView: View {
         model.registryResetBackupPath != nil || model.checkRunProgress != nil
             || model.checkRunSummary != nil || model.updateResult != nil
             || model.updateRefreshFailure != nil || model.projectScanRootError != nil
-            || model.sourceMappingError != nil
+            || model.sourceMappingError != nil || model.visibilityClaimError != nil
     }
 
     var body: some View {
@@ -319,6 +333,14 @@ private struct ResultAreaView: View {
                     icon: "exclamationmark.triangle",
                     text: "无法保存来源映射：\(error.reason)",
                     onDismiss: { model.clearSourceMappingError() }
+                )
+            }
+            if let error = model.visibilityClaimError {
+                ResultBanner(
+                    level: .failure,
+                    icon: "xmark.circle",
+                    text: "调用面操作失败：\(error.reason)",
+                    onDismiss: { model.clearVisibilityClaimError() }
                 )
             }
     }
@@ -1121,6 +1143,10 @@ private struct SkillDetailPanel: View {
     let updateDisabledReason: String
     let isPreparingUpdate: Bool
     let startUpdate: (String?) -> Void
+    let setClaudeExposureLevel: (ExposureLevel) async -> Void
+    let reapplyClaudeClaim: () async -> Void
+    let adoptClaudeDiskConfiguration: () async -> Void
+    let restoreClaudeConfiguration: () async -> Void
     let deleteMapping: (String) async -> Void
 
     var body: some View {
@@ -1136,7 +1162,13 @@ private struct SkillDetailPanel: View {
                     NameCollisionBlock(collision: nameCollision)
                 }
 
-                InvocationSurfaceBlock(surfaces: invocationSurfaces)
+                InvocationSurfaceBlock(
+                    surfaces: invocationSurfaces,
+                    setClaudeExposureLevel: setClaudeExposureLevel,
+                    reapplyClaudeClaim: reapplyClaudeClaim,
+                    adoptClaudeDiskConfiguration: adoptClaudeDiskConfiguration,
+                    restoreClaudeConfiguration: restoreClaudeConfiguration
+                )
 
                 CheckoutStatusBlock(
                     checkouts: checkouts,
@@ -1204,10 +1236,29 @@ private struct NameCollisionBlock: View {
     }
 }
 
-// MARK: - 详情块：调用面（实时只读；能力缺口不静默降级）
+// MARK: - 详情块：调用面（实时文件事实 + Claude Code 显式主张动作）
 
 private struct InvocationSurfaceBlock: View {
     let surfaces: [HostInvocationSurface]
+    let setClaudeExposureLevel: ((ExposureLevel) async -> Void)?
+    let reapplyClaudeClaim: (() async -> Void)?
+    let adoptClaudeDiskConfiguration: (() async -> Void)?
+    let restoreClaudeConfiguration: (() async -> Void)?
+    @State private var isApplyingClaudeChange = false
+
+    init(
+        surfaces: [HostInvocationSurface],
+        setClaudeExposureLevel: ((ExposureLevel) async -> Void)? = nil,
+        reapplyClaudeClaim: (() async -> Void)? = nil,
+        adoptClaudeDiskConfiguration: (() async -> Void)? = nil,
+        restoreClaudeConfiguration: (() async -> Void)? = nil
+    ) {
+        self.surfaces = surfaces
+        self.setClaudeExposureLevel = setClaudeExposureLevel
+        self.reapplyClaudeClaim = reapplyClaudeClaim
+        self.adoptClaudeDiskConfiguration = adoptClaudeDiskConfiguration
+        self.restoreClaudeConfiguration = restoreClaudeConfiguration
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.block) {
@@ -1219,14 +1270,17 @@ private struct InvocationSurfaceBlock: View {
                     .foregroundStyle(DesignTokens.Status.neutral)
             }
             ForEach(surfaces) { surface in
-                VStack(alignment: .leading, spacing: DesignTokens.Space.tight) {
+                VStack(alignment: .leading, spacing: DesignTokens.Space.row) {
                     HStack {
                         Text(surface.host.displayName)
                             .font(DesignTokens.Fonts.rowTitle)
                         Spacer()
                         Text(stateText(surface.state))
                             .font(DesignTokens.Fonts.rowTitle)
-                            .foregroundStyle(stateColor(surface.state))
+                            .foregroundStyle(stateColor(surface))
+                    }
+                    if surface.host == .claude, setClaudeExposureLevel != nil {
+                        claudeControls(for: surface)
                     }
                     if !surface.unsupportedLevels.isEmpty {
                         Text("档位缺口：" + surface.unsupportedLevels
@@ -1246,6 +1300,95 @@ private struct InvocationSurfaceBlock: View {
         }
     }
 
+    @ViewBuilder
+    private func claudeControls(for surface: HostInvocationSurface) -> some View {
+        Picker(
+            "主张档位",
+            selection: Binding(
+                get: { selectedLevel(for: surface) },
+                set: { level in
+                    guard let setClaudeExposureLevel else { return }
+                    runClaudeAction { await setClaudeExposureLevel(level) }
+                }
+            )
+        ) {
+            ForEach(ExposureLevel.allCases, id: \.self) { level in
+                Text(level.displayName).tag(level)
+            }
+        }
+        .pickerStyle(.segmented)
+        .disabled(
+            isApplyingClaudeChange ||
+                (currentLevel(for: surface) == nil && surface.claimLevel == nil)
+        )
+
+        if let claimLevel = surface.claimLevel {
+            Text("当前主张：\(claimLevel.displayName)")
+                .font(DesignTokens.Fonts.caption)
+                .foregroundStyle(DesignTokens.Status.neutral)
+        } else {
+            Text("尚无主张；当前显示磁盘配置。")
+                .font(DesignTokens.Fonts.caption)
+                .foregroundStyle(DesignTokens.Status.neutral)
+        }
+
+        if surface.hasDivergence {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.inline) {
+                Label("主张与配置不一致", systemImage: "exclamationmark.triangle.fill")
+                    .font(DesignTokens.Fonts.rowTitle)
+                    .foregroundStyle(DesignTokens.Status.warning)
+                Text("磁盘配置：\(stateText(surface.state))；当前主张：\(surface.claimLevel?.displayName ?? "无")。")
+                    .font(DesignTokens.Fonts.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    if let reapplyClaudeClaim {
+                        Button("重新应用主张") {
+                            runClaudeAction { await reapplyClaudeClaim() }
+                        }
+                    }
+                    if let adoptClaudeDiskConfiguration {
+                        Button("采用磁盘配置") {
+                            runClaudeAction { await adoptClaudeDiskConfiguration() }
+                        }
+                    }
+                }
+                .disabled(isApplyingClaudeChange)
+            }
+            .padding(DesignTokens.Space.block)
+            .background(
+                DesignTokens.Surface.bannerTint(DesignTokens.Status.warning),
+                in: RoundedRectangle(cornerRadius: DesignTokens.Radius.inset)
+            )
+        }
+
+        if let restoreClaudeConfiguration {
+            Button("恢复 Claude 配置", systemImage: "arrow.uturn.backward") {
+                runClaudeAction { await restoreClaudeConfiguration() }
+            }
+            .disabled(isApplyingClaudeChange)
+            .help("用最近一次 Pagugu 写入前的单槽备份恢复 Claude Code 用户配置。")
+        }
+    }
+
+    private func selectedLevel(for surface: HostInvocationSurface) -> ExposureLevel {
+        surface.claimLevel ?? currentLevel(for: surface) ?? .fullyExposed
+    }
+
+    private func currentLevel(for surface: HostInvocationSurface) -> ExposureLevel? {
+        switch surface.state {
+        case .level(let level), .unsupported(let level): return level
+        case .readFailed: return nil
+        }
+    }
+
+    private func runClaudeAction(_ action: @escaping () async -> Void) {
+        isApplyingClaudeChange = true
+        Task {
+            await action()
+            isApplyingClaudeChange = false
+        }
+    }
+
     private func stateText(_ state: HostInvocationSurfaceState) -> String {
         switch state {
         case .level(let level): return level.displayName
@@ -1254,8 +1397,9 @@ private struct InvocationSurfaceBlock: View {
         }
     }
 
-    private func stateColor(_ state: HostInvocationSurfaceState) -> Color {
-        switch state {
+    private func stateColor(_ surface: HostInvocationSurface) -> Color {
+        if surface.hasDivergence { return DesignTokens.Status.warning }
+        switch surface.state {
         case .level: return DesignTokens.Status.neutral
         case .unsupported, .readFailed: return DesignTokens.Status.warning
         }

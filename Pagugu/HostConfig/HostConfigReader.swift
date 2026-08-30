@@ -14,13 +14,46 @@ enum HostInvocationSurfaceState: Equatable, Sendable {
     case readFailed
 }
 
-/// Skill × Agent Host 的只读调用面投影。
+/// Skill × Agent Host 的调用面投影。Reader 只填文件事实；AppModel 可附加 Registry Claim 并派生分歧。
 struct HostInvocationSurface: Identifiable, Equatable, Sendable {
     var id: AgentHost { host }
 
     let host: AgentHost
     let state: HostInvocationSurfaceState
     let unsupportedLevels: [ExposureLevel]
+    let claimLevel: ExposureLevel?
+
+    init(
+        host: AgentHost,
+        state: HostInvocationSurfaceState,
+        unsupportedLevels: [ExposureLevel],
+        claimLevel: ExposureLevel? = nil
+    ) {
+        self.host = host
+        self.state = state
+        self.unsupportedLevels = unsupportedLevels
+        self.claimLevel = claimLevel
+    }
+
+    /// 分歧只由当前可验证文件档位与持久主张派生；读取失败保持 Unknown，不冒充分歧结论。
+    var hasDivergence: Bool {
+        guard let claimLevel else { return false }
+        switch state {
+        case .level(let currentLevel), .unsupported(let currentLevel):
+            return currentLevel != claimLevel
+        case .readFailed:
+            return false
+        }
+    }
+
+    func withClaimLevel(_ claimLevel: ExposureLevel?) -> HostInvocationSurface {
+        HostInvocationSurface(
+            host: host,
+            state: state,
+            unsupportedLevels: unsupportedLevels,
+            claimLevel: claimLevel
+        )
+    }
 }
 
 /// 实时读取宿主配置。文件不存在表示宿主默认行为；已存在但不可读或格式无效时 fail closed。

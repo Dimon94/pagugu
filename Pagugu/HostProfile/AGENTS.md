@@ -4,7 +4,7 @@
 
 成员清单:
 - `HostProfile.swift`：`AgentHost`、`ExposureLevel`、`HostSkillScope`、`HostProfile`、`HostProfiles`。`AgentHost` / `ExposureLevel` rawValue 是 Registry v2 稳定编码值；`HostProfiles.personalSkillRoots()` 是 Discovery 默认根的 canonical owner；`HostProfiles.hosts(for:scope:)` 只按档案归因；`HostProfile.supports(_:)` 裁决档位能力。Claude Code 支持四档；Codex 不支持 `nameOnly`；Pi 不支持 `nameOnly`，且 `fullyDisabled` 仍按 repo://docs/adr/0011-pagugu-owned-pi-extension.md 的 Unknown fail closed。
-- `NameCollision.swift`：`HostSkillLocation`、`NameCollisionCandidate`、`NameCollisionGroup`、`CollisionDiagnostic` 与 `NameCollisionEngine.groups(from:)`。它按 trim + 大小写折叠后的 frontmatter `name` 分组；name 缺失或空白时回退安装目录名。
+- `NameCollision.swift`：`HostSkillLocation`、`NameCollisionCandidate`、`NameCollisionGroup`、`CollisionDiagnostic`、`NameCollisionEngine.normalizedName(_:)` 与 `groups(from:)`。`normalizedName` 是 trim + 大小写折叠的唯一规则，分组与共享 name-key 写入前歧义检查复用；frontmatter name 缺失或空白时分组回退安装目录名。
 - 固定规则：Claude Code 的 Personal 与 Project 同名时 Personal 遮蔽 Project；Codex 与 Pi 的同名位置共存时结果歧义。Personal `~/.agents/skills` 同时归 Codex 与 Pi；Project `.agents/skills` 只归 Codex。Pi 私有 Personal Root 是 `~/.pi/agent/skills`，当前没有 Pi Project Root。
 
 反模式: 不按同名合并 Skill Identity、Installation 或 Source；不让冲突诊断或调用面档位改变更新资格；不读写磁盘；不把一个宿主的规则套给其他宿主；不让候选输入顺序改变输出；不在这里实现调用面配置读取或写入。

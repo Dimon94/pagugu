@@ -25,3 +25,4 @@
 | 2026-08-30 | 无新增 | — | 本次落地 Pi/共享根发现、三宿主 HostProfile 与同名共存只读诊断，未发现需延后加固的问题。 | repo://Pagugu/HostProfile、repo://Pagugu/AppModel/SkillReadModel.swift、repo://Pagugu/Views/ContentView.swift | — | — |
 | 2026-08-30 | 无新增 | — | 本次落地三宿主调用面配置实时只读投影、Unsupported 与读取失败呈现，未发现需延后加固的问题。 | repo://Pagugu/HostConfig、repo://PaguguTests/HostConfigReaderTests.swift、repo://PaguguTests/AppModelSurfaceTests.swift | — | — |
 | 2026-08-30 | 无新增 | — | 本次落地 Registry v2、v1→v2 无损迁移与通用 JSON HostConfigWriter headless 核心，未发现需延后加固的问题。 | repo://Pagugu/Persistence/Persistence.swift、repo://Pagugu/Registry/Registry.swift、repo://Pagugu/HostConfig/HostConfigWriter.swift | — | — |
+| 2026-08-30 | 无新增 | — | 本次落地 Claude Code 四档切换、主张分歧解决与单槽配置恢复，未发现需延后加固的问题。 | repo://Pagugu/HostConfig/ClaudeConfigWriter.swift、repo://Pagugu/AppModel/AppModel.swift、repo://Pagugu/Views/ContentView.swift | — | — |

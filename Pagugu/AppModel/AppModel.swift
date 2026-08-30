@@ -3,8 +3,9 @@ import Foundation
 // L3 COORD: Pagugu/AppModel/AppModel.swift
 // OUTPUT: AppModel UI intent/只读投影，以及只供 composition root 注入的 RegistryResetting reset seam。
 // POS: AppModel 模块（ADR-0009 §7）。@MainActor composition root：
-//      owns Skill Read Model、受限恢复与来源映射错误投影、目录收起、Check/Update 瞬态、全部 UI intent
-//      与启动/刷新编排；每次发布重读 HostConfig 调用面事实，并按实时 Git 事实重推导观察 freshness。
+//      owns Skill Read Model、受限恢复/来源映射/调用面动作错误投影、Claude Code 主张动作顺序编排、
+//      目录收起、Check/Update 瞬态、全部 UI intent 与启动/刷新编排；每次发布重读 HostConfig 调用面事实，
+//      合并 Registry Claim 派生分歧，并按实时 Git 事实重推导观察 freshness。
 //      取消确认或更新失败后，目标检出
 //      在新的成功检查前不再消费旧观察。审计历史投影只服务「最近活动」呈现；
 //      Registry reset 成功后呈现 quarantine 备份路径；受限恢复「退出自行修复」经 requestQuit 发出应用退出 intent。
@@ -12,7 +13,8 @@ import Foundation
 //      （经 HostConfig/Git/Discovery/Registry/Audit/Runs seam）、
 //      业务规则重建。
 // TEST: repo://PaguguTests/AppModelTests.swift（Registry gate、requestQuit 退出 intent、Project Scan Root intent、
-//      目录投影与 intent 路由 smoke、审计呈现投影）；repo://PaguguTests/AppModelSurfaceTests.swift（调用面投影）。
+//      目录投影与 intent 路由 smoke、审计呈现投影）；repo://PaguguTests/AppModelSurfaceTests.swift（调用面事实）；
+//      repo://PaguguTests/AppModelClaudeConflictTests.swift（Claude 主张、分歧、冲突解决与恢复）。
 
 enum AppRun: Equatable, Sendable {
     case check
@@ -56,6 +58,29 @@ struct UpdateRefreshFailure: Equatable, Sendable {
     let issueCount: Int
 }
 
+enum VisibilityClaimActionError: Equatable, Sendable {
+    case skillUnavailable
+    case ambiguousSkillName
+    case claimUnavailable
+    case registry(VisibilityClaimError)
+    case hostConfiguration(HostConfigWriterError)
+
+    var reason: String {
+        switch self {
+        case .skillUnavailable:
+            return "该 Skill 已不在当前 Claude Code 投影中。请重新扫描后再试。"
+        case .ambiguousSkillName:
+            return "存在多个同名 Claude Code Skill，无法把单个身份主张安全写入共享名称配置。请先消除同名冲突。"
+        case .claimUnavailable:
+            return "当前没有可重新应用的 Claude Code 主张。请重新选择档位。"
+        case .registry(let error):
+            return error.reason
+        case .hostConfiguration(let error):
+            return "Claude Code 配置写入失败。\(error.recoverySuggestion)"
+        }
+    }
+}
+
 /// AppModel 的 Registry reset seam。生产使用 AppRegistry；测试注入失败只验证 intent 投影。
 protocol RegistryResetting: Sendable {
     func reset(confirmed: Bool) async throws -> URL?
@@ -75,6 +100,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var checkRunProgress: CheckRunProgress?
     @Published private(set) var checkRunSummary: CheckRunSummary?
     @Published private(set) var sourceMappingError: SourceMappingError?
+    @Published private(set) var visibilityClaimError: VisibilityClaimActionError?
     @Published private(set) var pendingUpdatePlan: UpdatePlan?
     @Published private(set) var activeRun: AppRun?
     @Published private(set) var updateResult: UpdateResult?
@@ -94,6 +120,7 @@ final class AppModel: ObservableObject {
     private let registryResetter: any RegistryResetting
     private let audit: AuditEvidence
     private let hostConfigReader: HostConfigReader
+    private let claudeConfigWriter: ClaudeConfigWriter
     private let gitInspector: any GitInspecting
     private let gitExecutor: any GitExecuting
     private let terminateApplication: () -> Void
@@ -109,6 +136,7 @@ final class AppModel: ObservableObject {
         gitInspector: any GitInspecting = GitClient(),
         gitExecutor: any GitExecuting = GitClient(),
         hostConfigReader: HostConfigReader = HostConfigReader(),
+        claudeConfigWriter: ClaudeConfigWriter = ClaudeConfigWriter(),
         registryResetter: (any RegistryResetting)? = nil,
         terminateApplication: @escaping () -> Void = {}
     ) {
@@ -118,6 +146,7 @@ final class AppModel: ObservableObject {
         self.registryResetter = registryResetter ?? registry
         self.audit = AuditEvidence(persistence: persistence)
         self.hostConfigReader = hostConfigReader
+        self.claudeConfigWriter = claudeConfigWriter
         self.gitInspector = gitInspector
         self.gitExecutor = gitExecutor
         self.terminateApplication = terminateApplication
@@ -240,14 +269,12 @@ final class AppModel: ObservableObject {
             }
             return (source.id, cards)
         })
+        let visibilityClaims = await registry.visibilityClaims()
         let invocationSurfacesBySkillIdentity = Dictionary(uniqueKeysWithValues:
             contents.sources.flatMap(\.skills).map { entry in
                 (
                     entry.id,
-                    hostConfigReader.invocationSurfaces(
-                        skillName: entry.displayName,
-                        installations: entry.installations
-                    )
+                    invocationSurfaces(for: entry, visibilityClaims: visibilityClaims)
                 )
             }
         )
@@ -283,12 +310,133 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func invocationSurfaces(
+        for entry: SkillDirectoryEntry,
+        visibilityClaims: [VisibilityClaim]
+    ) -> [HostInvocationSurface] {
+        let claim = visibilityClaims.first { claim in
+            claim.skillSourceKey == entry.id.sourceKey.registryValue &&
+                claim.repositoryRelativePath == entry.id.repositoryRelativePath &&
+                claim.host == .claude
+        }
+        return hostConfigReader.invocationSurfaces(
+            skillName: entry.displayName,
+            installations: entry.installations
+        ).map { surface in
+            surface.host == .claude
+                ? surface.withClaimLevel(claim?.exposureLevel)
+                : surface
+        }
+    }
+
     // MARK: - UI Intents
 
     /// 用户请求重新扫描。
     func rescan() async {
         guard registryReady, registryRecovery == nil else { return }
         await publishDiscovery()
+    }
+
+    // L4 IN: Skill Identity 必须来自当前 Read Model、已安装到 Claude Code，且归一化 name 未被其他 Claude Skill 使用。
+    // OUT: Registry 主张 durable-first 写入，再合并写用户级 Claude settings；无论成功失败都重读文件事实刷新投影。
+    // FAIL: 同名配置键歧义或 Registry 失败不触碰 Claude 配置；配置失败保留已落盘主张并显式呈现错误与恢复方向。
+    // L6 CHAIN: 重查当前 Skill 与 name-key 唯一性 → Registry set → Claude merge write → 完整 Discovery 重读 Claim 与配置事实。
+    func setClaudeExposureLevel(
+        _ exposureLevel: ExposureLevel,
+        for skillIdentity: SkillIdentity
+    ) async -> Bool {
+        guard let entry = claudeSkillEntry(for: skillIdentity) else {
+            visibilityClaimError = .skillUnavailable
+            return false
+        }
+        guard !hasClaudeConfigurationKeyCollision(for: entry) else {
+            visibilityClaimError = .ambiguousSkillName
+            return false
+        }
+        let claim = VisibilityClaim(
+            skillSourceKey: skillIdentity.sourceKey.registryValue,
+            repositoryRelativePath: skillIdentity.repositoryRelativePath,
+            host: .claude,
+            exposureLevel: exposureLevel
+        )
+        do {
+            _ = try await registry.setVisibilityClaim(claim)
+        } catch let error as VisibilityClaimError {
+            handleVisibilityClaimError(error)
+            return false
+        } catch {
+            visibilityClaimError = .registry(.notLoaded)
+            return false
+        }
+        return await applyClaudeConfiguration(exposureLevel, for: entry)
+    }
+
+    /// 显式用当前 Registry Claim 重写 Claude 配置；不自动触发、不改变主张。
+    func reapplyClaudeVisibilityClaim(for skillIdentity: SkillIdentity) async -> Bool {
+        guard let entry = claudeSkillEntry(for: skillIdentity) else {
+            visibilityClaimError = .skillUnavailable
+            return false
+        }
+        guard !hasClaudeConfigurationKeyCollision(for: entry) else {
+            visibilityClaimError = .ambiguousSkillName
+            return false
+        }
+        let claims = await registry.visibilityClaims()
+        guard let claim = claims.first(where: { claim in
+            claim.skillSourceKey == skillIdentity.sourceKey.registryValue &&
+                claim.repositoryRelativePath == skillIdentity.repositoryRelativePath &&
+                claim.host == .claude
+        }) else {
+            visibilityClaimError = .claimUnavailable
+            return false
+        }
+        return await applyClaudeConfiguration(claim.exposureLevel, for: entry)
+    }
+
+    /// 采用实时磁盘配置只清除 Registry Claim，不改宿主文件。
+    func adoptClaudeDiskConfiguration(for skillIdentity: SkillIdentity) async -> Bool {
+        guard claudeSkillEntry(for: skillIdentity) != nil else {
+            visibilityClaimError = .skillUnavailable
+            return false
+        }
+        do {
+            let changed = try await registry.deleteVisibilityClaim(
+                skillSourceKey: skillIdentity.sourceKey.registryValue,
+                repositoryRelativePath: skillIdentity.repositoryRelativePath,
+                host: .claude
+            )
+            visibilityClaimError = nil
+            if changed { await publishDiscovery() }
+            return changed
+        } catch let error as VisibilityClaimError {
+            handleVisibilityClaimError(error)
+            return false
+        } catch {
+            visibilityClaimError = .registry(.notLoaded)
+            return false
+        }
+    }
+
+    /// 恢复最近一次 Pagugu 写入用户级 Claude 配置前的单槽备份；现有主张保留并重新派生分歧。
+    func restoreClaudeConfiguration() async -> Bool {
+        do {
+            try claudeConfigWriter.restoreConfiguration()
+            visibilityClaimError = nil
+            await publishDiscovery()
+            return true
+        } catch let error as HostConfigWriterError {
+            visibilityClaimError = .hostConfiguration(error)
+            await publishDiscovery()
+            return false
+        } catch {
+            visibilityClaimError = .hostConfiguration(.fileOperationFailed)
+            await publishDiscovery()
+            return false
+        }
+    }
+
+    func clearVisibilityClaimError() {
+        visibilityClaimError = nil
     }
 
     var canStartCheckRun: Bool {
@@ -744,6 +892,66 @@ final class AppModel: ObservableObject {
         case .notLoaded, .alreadyMapped, .installationUnavailable, .targetUnavailable,
              .persistence(.writeFailed), .persistence(.invalidDocument),
              .persistence(.notLoaded), .persistence(.resetConfirmationRequired):
+            break
+        }
+    }
+
+    private func claudeSkillEntry(for skillIdentity: SkillIdentity) -> SkillDirectoryEntry? {
+        guard registryReady, registryRecovery == nil,
+              let entry = readModel.skillEntry(for: skillIdentity),
+              entry.hosts.contains(.claude) else { return nil }
+        return entry
+    }
+
+    private func hasClaudeConfigurationKeyCollision(for entry: SkillDirectoryEntry) -> Bool {
+        guard let normalizedName = NameCollisionEngine.normalizedName(entry.displayName) else {
+            return true
+        }
+        let attributedCollision = readModel.sources.flatMap(\.skills).contains { otherEntry in
+            otherEntry.id != entry.id && otherEntry.hosts.contains(.claude) &&
+                NameCollisionEngine.normalizedName(otherEntry.displayName) == normalizedName
+        }
+        let unattributedCollision = readModel.unattributedInstallations.contains { item in
+            item.hosts.contains(.claude) &&
+                NameCollisionEngine.normalizedName(item.displayName) == normalizedName
+        }
+        return attributedCollision || unattributedCollision
+    }
+
+    private func applyClaudeConfiguration(
+        _ exposureLevel: ExposureLevel,
+        for entry: SkillDirectoryEntry
+    ) async -> Bool {
+        do {
+            try claudeConfigWriter.apply(
+                exposureLevel: exposureLevel,
+                forSkillNamed: entry.displayName
+            )
+            visibilityClaimError = nil
+            await publishDiscovery()
+            return true
+        } catch let error as HostConfigWriterError {
+            visibilityClaimError = .hostConfiguration(error)
+            await publishDiscovery()
+            return false
+        } catch {
+            visibilityClaimError = .hostConfiguration(.fileOperationFailed)
+            await publishDiscovery()
+            return false
+        }
+    }
+
+    private func handleVisibilityClaimError(_ error: VisibilityClaimError) {
+        visibilityClaimError = .registry(error)
+        switch error {
+        case .persistence(.externallyModified(let recovery)),
+             .persistence(.recoveryRequired(let recovery)):
+            registryRecovery = recovery
+            registryReady = false
+            readModel = .empty()
+        case .notLoaded, .unsupportedExposureLevel, .persistence(.writeFailed),
+             .persistence(.invalidDocument), .persistence(.notLoaded),
+             .persistence(.resetConfirmationRequired):
             break
         }
     }
