@@ -984,7 +984,7 @@ final class PrototypeWorld {
     }
 
     func resetRegistry() {
-        // 受限恢复模式中的「重置为空 Registry」：显式动作，先无条件 quarantine，再写空 v1。
+        // 受限恢复模式中的「重置为空 Registry」：显式动作，先无条件 quarantine，再写空 v2。
         registryMode = .normal
         scanRoots = []
         for skill in skills.indices { skills[skill].installations.removeAll { $0.attribution == .mapped } }

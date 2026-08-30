@@ -4,58 +4,75 @@ import Foundation
 // L3 COORD: Pagugu/Persistence/Persistence.swift
 // INPUT: Application Support 目录或测试注入目录中的 registry.json 与 audit-history.json。
 // OUTPUT: RegistryDocument 当前主张、阻断式 RegistryRecovery，或 fail-open AuditDocument。
-// POS: Persistence 物理 owner。只依赖 Foundation，不拥有主张语义。
+// POS: Persistence 物理 owner。依赖 Foundation/Darwin 与 HostProfile canonical 值/支持矩阵，不拥有主张语义。
 // TEST: repo://PaguguTests/PersistenceTests.swift、repo://PaguguTests/CheckRunTests.swift。
 
-// L5 PARAM: Registry schemaVersion 只接受 JSON 整数字面量 1；Audit schemaVersion 当前只接受 1；Audit FIFO 上限 200。
+// L5 PARAM: Registry schemaVersion 只接受 JSON 整数字面量 1 或 2；v1 仅用于严格迁移，当前写入固定为 2；
+// Audit schemaVersion 当前只接受 1；Audit FIFO 上限 200。
 // Audit action 为 source-mapping / check-run / update-run；Update start 无 outcome，terminal 使用 success/cancelled/failed；
 // failed reason 只接受审计 schema 列出的九个稳定 wire code，并由测试锁定为 Runs 的同一 rawValue 集合。
-// Registry 顶层恰好编码三类集合；未知字段可忽略且重写不保留。
-// PAIR: CheckoutObservation success 必须有 remoteTipSHA；failure 必须没有。
-// FAIL: 缺字段、类型不符、路径/身份配对无效均走损坏 quarantine。
+// Registry v2 顶层恰好编码四类集合；Visibility Claim 零时间戳、零派生标志位；未知字段可忽略且重写不保留。
+// PAIR: CheckoutObservation success 必须有 remoteTipSHA；failure 必须没有；同一 Skill Identity × Agent Host 至多一条主张；Pi 不入 Registry。
+// FAIL: 缺字段、类型不符、路径/身份配对无效均走损坏 quarantine；未知未来版本绝不覆写。
 private struct RegistrySchemaHeader: Decodable {
     let schemaVersion: Int
 }
 
+private struct RegistryDocumentV1: Decodable {
+    let schemaVersion: Int
+    let projectScanRoots: [ProjectScanRootRecord]
+    let sourceMappings: [String: SourceMappingRecord]
+    let checkoutObservations: [String: CheckoutObservation]
+
+    func migratedToV2() throws -> RegistryDocument {
+        guard schemaVersion == 1 else {
+            throw RegistryValidationError.invalidSchemaVersion
+        }
+        try validateRegistryCollections(
+            projectScanRoots: projectScanRoots,
+            sourceMappings: sourceMappings,
+            checkoutObservations: checkoutObservations
+        )
+        return RegistryDocument(
+            schemaVersion: RegistryDocument.currentSchemaVersion,
+            projectScanRoots: projectScanRoots,
+            sourceMappings: sourceMappings,
+            checkoutObservations: checkoutObservations,
+            visibilityClaims: []
+        )
+    }
+}
+
 struct RegistryDocument: Codable, Equatable, Sendable {
-    static let currentSchemaVersion = 1
+    static let currentSchemaVersion = 2
     static let empty = RegistryDocument(
         schemaVersion: currentSchemaVersion,
         projectScanRoots: [],
         sourceMappings: [:],
-        checkoutObservations: [:]
+        checkoutObservations: [:],
+        visibilityClaims: []
     )
 
     let schemaVersion: Int
     let projectScanRoots: [ProjectScanRootRecord]
     let sourceMappings: [String: SourceMappingRecord]
     let checkoutObservations: [String: CheckoutObservation]
+    let visibilityClaims: [VisibilityClaim]
 
     fileprivate func validate() throws {
         guard schemaVersion == Self.currentSchemaVersion else {
             throw RegistryValidationError.invalidSchemaVersion
         }
+        try validateRegistryCollections(
+            projectScanRoots: projectScanRoots,
+            sourceMappings: sourceMappings,
+            checkoutObservations: checkoutObservations
+        )
 
-        let rootPaths = projectScanRoots.map(\.canonicalPath)
-        guard Set(rootPaths).count == rootPaths.count,
-              projectScanRoots.allSatisfy({
-                  isNormalizedAbsolutePath($0.canonicalPath) && isNormalizedAbsolutePath($0.asFoundPath)
-              }) else {
-            throw RegistryValidationError.invalidProjectScanRoot
-        }
-
-        guard sourceMappings.allSatisfy({ key, value in
-            isNormalizedAbsolutePath(key) && isNormalizedSkillSourceKey(value.skillSourceKey) &&
-                isNormalizedRelativePath(value.repositoryRelativePath)
-        }) else {
-            throw RegistryValidationError.invalidSourceMapping
-        }
-
-        guard checkoutObservations.allSatisfy({ key, observation in
-            isNormalizedAbsolutePath(key) &&
-                key == observation.identityDigest.checkoutCanonicalPath && observation.isValid
-        }) else {
-            throw RegistryValidationError.invalidCheckoutObservation
+        let claimKeys = visibilityClaims.map(VisibilityClaimKey.init)
+        guard Set(claimKeys).count == claimKeys.count,
+              visibilityClaims.allSatisfy(\.isValid) else {
+            throw RegistryValidationError.invalidVisibilityClaim
         }
     }
 }
@@ -68,6 +85,40 @@ struct ProjectScanRootRecord: Codable, Equatable, Sendable {
 struct SourceMappingRecord: Codable, Equatable, Sendable {
     let skillSourceKey: String
     let repositoryRelativePath: String
+}
+
+/// Skill Identity × Agent Host × Exposure Level 的持久主张。文件事实与分歧状态不落盘。
+struct VisibilityClaim: Codable, Equatable, Hashable, Sendable {
+    let skillSourceKey: String
+    let repositoryRelativePath: String
+    let host: AgentHost
+    let exposureLevel: ExposureLevel
+
+    var isSupportedByHost: Bool {
+        guard host != .pi,
+              let profile = HostProfiles.all.first(where: { $0.host == host }) else {
+            return false
+        }
+        return profile.supports(exposureLevel)
+    }
+
+    fileprivate var isValid: Bool {
+        isSupportedByHost &&
+            isNormalizedSkillSourceKey(skillSourceKey) &&
+            isNormalizedRelativePath(repositoryRelativePath)
+    }
+}
+
+private struct VisibilityClaimKey: Hashable {
+    let skillSourceKey: String
+    let repositoryRelativePath: String
+    let host: AgentHost
+
+    init(_ claim: VisibilityClaim) {
+        skillSourceKey = claim.skillSourceKey
+        repositoryRelativePath = claim.repositoryRelativePath
+        host = claim.host
+    }
 }
 
 struct CheckoutObservation: Codable, Equatable, Sendable {
@@ -421,10 +472,39 @@ private enum RegistryValidationError: Error {
     case invalidProjectScanRoot
     case invalidSourceMapping
     case invalidCheckoutObservation
+    case invalidVisibilityClaim
 }
 
 private enum AuditValidationError: Error {
     case invalidDocument
+}
+
+private func validateRegistryCollections(
+    projectScanRoots: [ProjectScanRootRecord],
+    sourceMappings: [String: SourceMappingRecord],
+    checkoutObservations: [String: CheckoutObservation]
+) throws {
+    let rootPaths = projectScanRoots.map(\.canonicalPath)
+    guard Set(rootPaths).count == rootPaths.count,
+          projectScanRoots.allSatisfy({
+              isNormalizedAbsolutePath($0.canonicalPath) && isNormalizedAbsolutePath($0.asFoundPath)
+          }) else {
+        throw RegistryValidationError.invalidProjectScanRoot
+    }
+
+    guard sourceMappings.allSatisfy({ key, value in
+        isNormalizedAbsolutePath(key) && isNormalizedSkillSourceKey(value.skillSourceKey) &&
+            isNormalizedRelativePath(value.repositoryRelativePath)
+    }) else {
+        throw RegistryValidationError.invalidSourceMapping
+    }
+
+    guard checkoutObservations.allSatisfy({ key, observation in
+        isNormalizedAbsolutePath(key) &&
+            key == observation.identityDigest.checkoutCanonicalPath && observation.isValid
+    }) else {
+        throw RegistryValidationError.invalidCheckoutObservation
+    }
 }
 
 private func isNormalizedAbsolutePath(_ path: String) -> Bool {
@@ -469,7 +549,7 @@ actor Persistence {
         )
     }()
 
-    static let resetImpact = "将清空全部 Project Scan Root、来源映射与逐检出上次观察。前两项需人工重建；观察可通过重新检查重建。不会删除 Skill Source、Skill Installation 或 Git 工作树。"
+    static let resetImpact = "将清空全部 Project Scan Root、来源映射、逐检出上次观察与可见性主张。Project Scan Root、来源映射与可见性主张需人工重建；观察可通过重新检查重建。不会删除 Skill Source、Skill Installation 或 Git 工作树。"
 
     private let directoryURL: URL
     private let registryURL: URL
@@ -521,6 +601,9 @@ actor Persistence {
                 )
             }
 
+            if schemaVersion == 1 {
+                return migrateV1Registry(bytes)
+            }
             guard schemaVersion == RegistryDocument.currentSchemaVersion else {
                 throw RegistryValidationError.invalidSchemaVersion
             }
@@ -539,7 +622,7 @@ actor Persistence {
         }
     }
 
-    /// L4 IN: 必须先完成 loadRegistry；document 必须满足 v1 schema。
+    /// L4 IN: 必须先完成 loadRegistry；document 必须满足 v2 schema。
     /// OUT: 双 fsync 与 rename 全部成功后才更新 last-good 内存投影。
     /// FAIL: 磁盘字节漂移时绝不覆写；写失败保留原磁盘与原内存投影。
     func saveRegistry(_ document: RegistryDocument) throws {
@@ -593,7 +676,7 @@ actor Persistence {
     }
 
     /// L4 IN: confirmed 必须由显式确认对话框传入。
-    /// OUT: 先 quarantine 当前 registry.json，再原子写入空 v1；返回保留的证据路径。
+    /// OUT: 先 quarantine 当前 registry.json，再原子写入空 v2；返回保留的证据路径。
     /// FAIL: 未确认零副作用；quarantine 或写入失败时不提交空内存投影。
     func resetRegistry(confirmed: Bool) throws -> URL? {
         guard confirmed else {
@@ -702,6 +785,48 @@ actor Persistence {
         } catch {
             throw AuditValidationError.invalidDocument
         }
+    }
+
+    // L6 DOC: repo://docs/adr/0008-app-registry-persistence-contract.md §8。
+    // CHAIN: 严格解码并校验完整 v1 → 纯转换为 v2 → durable 保留迁移前字节 → durable 替换 registry.json → 发布 v2。
+    // FAIL: 校验失败走损坏 quarantine；备份或替换失败保持原 registry.json，不发布迁移结果并进入 writeFailed 受限模式。
+    private func migrateV1Registry(_ bytes: Data) -> RegistryLoadResult {
+        let document: RegistryDocument
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            document = try decoder.decode(RegistryDocumentV1.self, from: bytes).migratedToV2()
+        } catch {
+            let evidenceURL = quarantineCorruptRegistry()
+            return remember(
+                .restricted(RegistryRecovery(kind: .corrupt, evidenceURL: evidenceURL)),
+                bytes: nil
+            )
+        }
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        do {
+            let migratedBytes = try encoder.encode(document)
+            try ensureDirectory()
+            let backupURL = preMigrationBackupURL(fromVersion: 1)
+            try writeDurably(bytes, to: backupURL)
+            try writeDurably(migratedBytes, to: registryURL)
+            return remember(.ready(document), bytes: migratedBytes)
+        } catch {
+            return remember(
+                .restricted(RegistryRecovery(kind: .writeFailed, evidenceURL: registryURL)),
+                bytes: bytes
+            )
+        }
+    }
+
+    private func preMigrationBackupURL(fromVersion: Int) -> URL {
+        let suffix = "\(Int(Date().timeIntervalSince1970 * 1_000))-\(UUID().uuidString)"
+        return directoryURL.appendingPathComponent(
+            "registry.v\(fromVersion).pre-migration-\(suffix).json"
+        )
     }
 
     private func remember(_ result: RegistryLoadResult, bytes: Data?) -> RegistryLoadResult {

@@ -2,7 +2,7 @@ import Foundation
 
 // L3 COORD: Pagugu/Registry/Registry.swift
 // INPUT: 用户选择的目录 URL、Personal Skill Root 与 Persistence 的 RegistryDocument。
-// OUTPUT: 按序、无丢失持久化的 Project Scan Root、来源映射、Checkout Observation 与实时投影；
+// OUTPUT: 按序、无丢失持久化的 Project Scan Root、来源映射、Checkout Observation、Visibility Claim 与实时投影；
 //         来源映射写成功后 best-effort 记录审计。
 // POS: Registry 语义 owner。拥有串行 mutation、护栏、主张生命周期与观察单槽；
 //      不拥有物理 IO、Discovery、映射有效性裁决与 UI。
@@ -54,6 +54,31 @@ enum ProjectScanRootError: Error, Equatable, Sendable {
             return "Registry 无法保存该主张。请退出并重新打开 Pagugu 后重试。"
         case .persistence(.resetConfirmationRequired):
             return "重置前需要显式确认。"
+        }
+    }
+}
+
+enum VisibilityClaimError: Error, Equatable, Sendable {
+    case notLoaded
+    case unsupportedExposureLevel
+    case persistence(PersistenceError)
+
+    var reason: String {
+        switch self {
+        case .notLoaded:
+            return "App Registry 尚未载入。请稍后重试。"
+        case .unsupportedExposureLevel:
+            return "该 Agent Host 不支持所选调用面档位。请选择受支持档位。"
+        case .persistence(.writeFailed):
+            return "Registry 写入失败。请检查磁盘空间与目录权限后重试。"
+        case .persistence(.externallyModified):
+            return "Registry 已被外部修改。请退出并重新打开 Pagugu 后重试。"
+        case .persistence(.recoveryRequired):
+            return "App Registry 需要恢复。请先按页面指引恢复。"
+        case .persistence(.notLoaded), .persistence(.invalidDocument):
+            return "Registry 无法保存该可见性主张。请退出并重新打开 Pagugu 后重试。"
+        case .persistence(.resetConfirmationRequired):
+            return "该动作不应触发 Registry 重置。"
         }
     }
 }
@@ -191,10 +216,86 @@ actor AppRegistry {
             schemaVersion: document.schemaVersion,
             projectScanRoots: document.projectScanRoots,
             sourceMappings: document.sourceMappings,
-            checkoutObservations: observations
+            checkoutObservations: observations,
+            visibilityClaims: document.visibilityClaims
         )
         try await persistence.saveRegistry(updated)
         self.document = updated
+    }
+
+    func visibilityClaims() -> [VisibilityClaim] {
+        document?.visibilityClaims ?? []
+    }
+
+    /// L4 IN: claim 必须使用 Host Profile 支持的档位；Pi 主张不入 Registry。
+    /// OUT: 同一 Skill Identity × Agent Host 只有一个槽；相同主张不写盘，档位变化原位替换。
+    /// FAIL: 不支持的档位与持久失败均零主张变更，并返回稳定恢复方向。
+    func setVisibilityClaim(_ claim: VisibilityClaim) async throws -> Bool {
+        await beginMutation()
+        defer { endMutation() }
+        guard let document else { throw VisibilityClaimError.notLoaded }
+        guard claim.isSupportedByHost else {
+            throw VisibilityClaimError.unsupportedExposureLevel
+        }
+
+        var claims = document.visibilityClaims
+        if let index = claims.firstIndex(where: { existing in
+            existing.skillSourceKey == claim.skillSourceKey &&
+                existing.repositoryRelativePath == claim.repositoryRelativePath &&
+                existing.host == claim.host
+        }) {
+            guard claims[index] != claim else { return false }
+            claims[index] = claim
+        } else {
+            claims.append(claim)
+        }
+
+        let updated = RegistryDocument(
+            schemaVersion: document.schemaVersion,
+            projectScanRoots: document.projectScanRoots,
+            sourceMappings: document.sourceMappings,
+            checkoutObservations: document.checkoutObservations,
+            visibilityClaims: claims
+        )
+        do {
+            try await persistence.saveRegistry(updated)
+        } catch let error as PersistenceError {
+            throw VisibilityClaimError.persistence(error)
+        }
+        self.document = updated
+        return true
+    }
+
+    /// 只删除可见性主张，不写宿主配置、不触碰 Skill Source。
+    func deleteVisibilityClaim(
+        skillSourceKey: String,
+        repositoryRelativePath: String,
+        host: AgentHost
+    ) async throws -> Bool {
+        await beginMutation()
+        defer { endMutation() }
+        guard let document else { throw VisibilityClaimError.notLoaded }
+
+        let claims = document.visibilityClaims.filter { claim in
+            claim.skillSourceKey != skillSourceKey ||
+                claim.repositoryRelativePath != repositoryRelativePath ||
+                claim.host != host
+        }
+        guard claims.count != document.visibilityClaims.count else { return false }
+        let updated = RegistryDocument(
+            schemaVersion: document.schemaVersion,
+            projectScanRoots: document.projectScanRoots,
+            sourceMappings: document.sourceMappings,
+            checkoutObservations: document.checkoutObservations,
+            visibilityClaims: claims
+        )
+        do {
+            try await persistence.saveRegistry(updated)
+        } catch let error as PersistenceError {
+            throw VisibilityClaimError.persistence(error)
+        }
+        self.document = updated
+        return true
     }
 
     func sourceMappings() -> [String: SourceMappingRecord] {
@@ -221,7 +322,8 @@ actor AppRegistry {
             schemaVersion: document.schemaVersion,
             projectScanRoots: document.projectScanRoots,
             sourceMappings: mappings,
-            checkoutObservations: document.checkoutObservations
+            checkoutObservations: document.checkoutObservations,
+            visibilityClaims: document.visibilityClaims
         )
         try await save(updated, as: SourceMappingError.self)
         await audit.recordSourceMapping(
@@ -245,7 +347,8 @@ actor AppRegistry {
             schemaVersion: document.schemaVersion,
             projectScanRoots: document.projectScanRoots,
             sourceMappings: mappings,
-            checkoutObservations: document.checkoutObservations
+            checkoutObservations: document.checkoutObservations,
+            visibilityClaims: document.visibilityClaims
         )
         try await save(updated, as: SourceMappingError.self)
         await audit.recordSourceMapping(
@@ -322,7 +425,8 @@ actor AppRegistry {
             schemaVersion: document.schemaVersion,
             projectScanRoots: roots,
             sourceMappings: document.sourceMappings,
-            checkoutObservations: document.checkoutObservations
+            checkoutObservations: document.checkoutObservations,
+            visibilityClaims: document.visibilityClaims
         )
         try await save(updated, as: ProjectScanRootError.self)
     }

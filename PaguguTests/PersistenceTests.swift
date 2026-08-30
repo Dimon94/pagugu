@@ -43,79 +43,89 @@ final class PersistenceTests: XCTestCase {
             Case(name: "空文件", json: "", expectedKind: .corrupt),
             Case(name: "不可解析", json: "{", expectedKind: .corrupt),
             Case(
-                name: "缺少必填集合",
-                json: #"{"schemaVersion":1,"projectScanRoots":[],"sourceMappings":{}}"#,
+                name: "缺少 v2 必填集合",
+                json: #"{"schemaVersion":2,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{}}"#,
                 expectedKind: .corrupt
             ),
             Case(
-                name: "当前无已知旧版本迁移",
+                name: "未知旧版本",
                 json: #"{"schemaVersion":0,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{}}"#,
                 expectedKind: .corrupt
             ),
             Case(
                 name: "未知未来版本",
-                json: #"{"schemaVersion":2,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{}}"#,
+                json: #"{"schemaVersion":3,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{},"visibilityClaims":[]}"#,
                 expectedKind: .unknownFutureVersion
             ),
             Case(
                 name: "布尔 schema 版本",
-                json: #"{"schemaVersion":true,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{}}"#,
+                json: #"{"schemaVersion":true,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{},"visibilityClaims":[]}"#,
                 expectedKind: .corrupt
             ),
             Case(
                 name: "非整数 schema 版本",
-                json: #"{"schemaVersion":1.5,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{}}"#,
+                json: #"{"schemaVersion":2.5,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{},"visibilityClaims":[]}"#,
                 expectedKind: .corrupt
             ),
-            // 错误实现会失败：JSONDecoder 会把 1.0 解码成 Int 1，继而错误进入 ready。
+            // 错误实现会失败：JSONDecoder 会把 2.0 解码成 Int 2，继而错误进入 ready。
             Case(
                 name: "浮点字面量 schema 版本",
-                json: #"{"schemaVersion":1.0,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{}}"#,
+                json: #"{"schemaVersion":2.0,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{},"visibilityClaims":[]}"#,
                 expectedKind: .corrupt
             ),
             Case(
                 name: "等价浮点字面量 schema 版本",
-                json: #"{"schemaVersion":1.00,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{}}"#,
+                json: #"{"schemaVersion":2.00,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{},"visibilityClaims":[]}"#,
                 expectedKind: .corrupt
             ),
             Case(
                 name: "未知字段",
-                json: #"{"schemaVersion":1,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{},"futureOptional":true}"#,
+                json: #"{"schemaVersion":2,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{},"visibilityClaims":[],"futureOptional":true}"#,
                 expectedKind: nil
             ),
             Case(
                 name: "类型不符",
-                json: #"{"schemaVersion":1,"projectScanRoots":"wrong","sourceMappings":{},"checkoutObservations":{}}"#,
+                json: #"{"schemaVersion":2,"projectScanRoots":"wrong","sourceMappings":{},"checkoutObservations":{},"visibilityClaims":[]}"#,
+                expectedKind: .corrupt
+            ),
+            Case(
+                name: "Pi 主张不入 Registry",
+                json: #"{"schemaVersion":2,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{},"visibilityClaims":[{"skillSourceKey":"github.com/Owner/repo","repositoryRelativePath":"skills/example","host":"pi","exposureLevel":"explicitOnly"}]}"#,
+                expectedKind: .corrupt
+            ),
+            Case(
+                name: "宿主不支持的档位",
+                json: #"{"schemaVersion":2,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{},"visibilityClaims":[{"skillSourceKey":"github.com/Owner/repo","repositoryRelativePath":"skills/example","host":"codex","exposureLevel":"nameOnly"}]}"#,
                 expectedKind: .corrupt
             ),
             Case(
                 name: "来源键未规范化",
-                json: #"{"schemaVersion":1,"projectScanRoots":[],"sourceMappings":{"/installation":{"skillSourceKey":"HTTPS://github.com/Owner/repo.git","repositoryRelativePath":"skills/example"}},"checkoutObservations":{}}"#,
+                json: #"{"schemaVersion":2,"projectScanRoots":[],"sourceMappings":{"/installation":{"skillSourceKey":"HTTPS://github.com/Owner/repo.git","repositoryRelativePath":"skills/example"}},"checkoutObservations":{},"visibilityClaims":[]}"#,
                 expectedKind: .corrupt
             ),
             Case(
                 name: "来源键含空路径段",
-                json: #"{"schemaVersion":1,"projectScanRoots":[],"sourceMappings":{"/installation":{"skillSourceKey":"github.com//Owner/repo","repositoryRelativePath":"skills/example"}},"checkoutObservations":{}}"#,
+                json: #"{"schemaVersion":2,"projectScanRoots":[],"sourceMappings":{"/installation":{"skillSourceKey":"github.com//Owner/repo","repositoryRelativePath":"skills/example"}},"checkoutObservations":{},"visibilityClaims":[]}"#,
                 expectedKind: .corrupt
             ),
             Case(
                 name: "点号不是 canonical 仓库根相对路径",
-                json: #"{"schemaVersion":1,"projectScanRoots":[],"sourceMappings":{"/installation":{"skillSourceKey":"/repository","repositoryRelativePath":"."}},"checkoutObservations":{}}"#,
+                json: #"{"schemaVersion":2,"projectScanRoots":[],"sourceMappings":{"/installation":{"skillSourceKey":"/repository","repositoryRelativePath":"."}},"checkoutObservations":{},"visibilityClaims":[]}"#,
                 expectedKind: .corrupt
             ),
             Case(
                 name: "路径未规范化",
-                json: #"{"schemaVersion":1,"projectScanRoots":[{"canonicalPath":"/tmp/../root","asFoundPath":"/root"}],"sourceMappings":{},"checkoutObservations":{}}"#,
+                json: #"{"schemaVersion":2,"projectScanRoots":[{"canonicalPath":"/tmp/../root","asFoundPath":"/root"}],"sourceMappings":{},"checkoutObservations":{},"visibilityClaims":[]}"#,
                 expectedKind: .corrupt
             ),
             Case(
                 name: "成功观察缺少 remote tip",
-                json: #"{"schemaVersion":1,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{"/checkout":{"result":"success","completedAt":"2026-08-25T00:00:00Z","identityDigest":{"checkoutCanonicalPath":"/checkout","gitCommonDirIdentifier":"git-dir","normalizedRemoteURL":"git@example.com:repo.git","branchName":"main","upstreamRefName":"origin/main"}}}}"#,
+                json: #"{"schemaVersion":2,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{"/checkout":{"result":"success","completedAt":"2026-08-25T00:00:00Z","identityDigest":{"checkoutCanonicalPath":"/checkout","gitCommonDirIdentifier":"git-dir","normalizedRemoteURL":"git@example.com:repo.git","branchName":"main","upstreamRefName":"origin/main"}}},"visibilityClaims":[]}"#,
                 expectedKind: .corrupt
             ),
             Case(
                 name: "失败观察错误携带 remote tip",
-                json: #"{"schemaVersion":1,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{"/checkout":{"result":"failure","completedAt":"2026-08-25T00:00:00Z","remoteTipSHA":"abc123","identityDigest":{"checkoutCanonicalPath":"/checkout","gitCommonDirIdentifier":"git-dir","normalizedRemoteURL":"git@example.com:repo.git","branchName":"main","upstreamRefName":"origin/main"}}}}"#,
+                json: #"{"schemaVersion":2,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{"/checkout":{"result":"failure","completedAt":"2026-08-25T00:00:00Z","remoteTipSHA":"abc123","identityDigest":{"checkoutCanonicalPath":"/checkout","gitCommonDirIdentifier":"git-dir","normalizedRemoteURL":"git@example.com:repo.git","branchName":"main","upstreamRefName":"origin/main"}}},"visibilityClaims":[]}"#,
                 expectedKind: .corrupt
             ),
         ]
@@ -176,7 +186,7 @@ final class PersistenceTests: XCTestCase {
     func testSourceMappingAcceptsEmptyRelativePathForSkillAtRepositoryRoot() async throws {
         let caseDirectory = directoryURL.appendingPathComponent(UUID().uuidString)
         try fileManager.createDirectory(at: caseDirectory, withIntermediateDirectories: true)
-        let json = #"{"schemaVersion":1,"projectScanRoots":[],"sourceMappings":{"/installation":{"skillSourceKey":"/repository","repositoryRelativePath":""}},"checkoutObservations":{}}"#
+        let json = #"{"schemaVersion":2,"projectScanRoots":[],"sourceMappings":{"/installation":{"skillSourceKey":"/repository","repositoryRelativePath":""}},"checkoutObservations":{},"visibilityClaims":[]}"#
         try Data(json.utf8).write(to: caseDirectory.appendingPathComponent("registry.json"))
 
         let result = await Persistence(directoryURL: caseDirectory).loadRegistry()
@@ -190,7 +200,7 @@ final class PersistenceTests: XCTestCase {
     func testDurableWriteUsesRequiredPermissionsAndDropsUnknownFields() async throws {
         try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         let registryURL = directoryURL.appendingPathComponent("registry.json")
-        let json = #"{"schemaVersion":1,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{},"futureOptional":true}"#
+        let json = #"{"schemaVersion":2,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{},"visibilityClaims":[],"futureOptional":true}"#
         try Data(json.utf8).write(to: registryURL)
         let persistence = Persistence(directoryURL: directoryURL)
         guard case .ready(let document) = await persistence.loadRegistry() else {
@@ -204,7 +214,7 @@ final class PersistenceTests: XCTestCase {
         )
         XCTAssertEqual(
             Set(rewritten.keys),
-            ["schemaVersion", "projectScanRoots", "sourceMappings", "checkoutObservations"]
+            ["schemaVersion", "projectScanRoots", "sourceMappings", "checkoutObservations", "visibilityClaims"]
         )
         XCTAssertNil(rewritten["futureOptional"])
         let directoryMode = try XCTUnwrap(
@@ -274,7 +284,7 @@ final class PersistenceTests: XCTestCase {
         try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         let registryURL = directoryURL.appendingPathComponent("registry.json")
         let futureData = Data(
-            #"{"schemaVersion":2,"projectScanRoots":[{"canonicalPath":"/kept","asFoundPath":"/kept"}],"sourceMappings":{},"checkoutObservations":{}}"#.utf8
+            #"{"schemaVersion":3,"projectScanRoots":[{"canonicalPath":"/kept","asFoundPath":"/kept"}],"sourceMappings":{},"checkoutObservations":{},"visibilityClaims":[]}"#.utf8
         )
         try futureData.write(to: registryURL)
         let persistence = Persistence(directoryURL: directoryURL)
@@ -444,7 +454,7 @@ final class PersistenceTests: XCTestCase {
     func testClearAuditEvidenceOnlyRemovesAuditCollectionWithoutTombstone() async throws {
         try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         let registryURL = directoryURL.appendingPathComponent("registry.json")
-        let registryJSON = #"{"schemaVersion":1,"projectScanRoots":[{"canonicalPath":"/scan","asFoundPath":"/scan"}],"sourceMappings":{},"checkoutObservations":{}}"#
+        let registryJSON = #"{"schemaVersion":2,"projectScanRoots":[{"canonicalPath":"/scan","asFoundPath":"/scan"}],"sourceMappings":{},"checkoutObservations":{},"visibilityClaims":[]}"#
         try Data(registryJSON.utf8).write(to: registryURL)
         let persistence = Persistence(directoryURL: directoryURL)
         _ = await persistence.loadRegistry()
@@ -522,7 +532,8 @@ final class PersistenceTests: XCTestCase {
                 ProjectScanRootRecord(canonicalPath: scanRoot, asFoundPath: scanRoot),
             ],
             sourceMappings: [:],
-            checkoutObservations: [:]
+            checkoutObservations: [:],
+            visibilityClaims: []
         )
     }
 }

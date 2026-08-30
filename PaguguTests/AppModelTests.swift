@@ -429,7 +429,7 @@ final class AppModelTests: XCTestCase {
         try fm.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
         let registryURL = dataDirectory.appendingPathComponent("registry.json")
         let futureData = Data(
-            #"{"schemaVersion":2,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{}}"#.utf8
+            #"{"schemaVersion":3,"projectScanRoots":[],"sourceMappings":{},"checkoutObservations":{},"visibilityClaims":[]}"#.utf8
         )
         try futureData.write(to: registryURL)
         let model = AppModel(
@@ -530,7 +530,8 @@ final class AppModelTests: XCTestCase {
                 ProjectScanRootRecord(canonicalPath: container.path, asFoundPath: container.path),
             ],
             sourceMappings: [:],
-            checkoutObservations: [:]
+            checkoutObservations: [:],
+            visibilityClaims: []
         ))
         let model = AppModel(personalRoots: [personalRoot.path], persistence: persistence)
 
@@ -558,7 +559,8 @@ final class AppModelTests: XCTestCase {
                 ),
             ],
             sourceMappings: [:],
-            checkoutObservations: [:]
+            checkoutObservations: [:],
+            visibilityClaims: []
         ))
         let model = AppModel(personalRoots: [personalRoot.path], persistence: persistence)
 
@@ -742,7 +744,8 @@ final class AppModelTests: XCTestCase {
             schemaVersion: RegistryDocument.currentSchemaVersion,
             projectScanRoots: [],
             sourceMappings: [:],
-            checkoutObservations: observations
+            checkoutObservations: observations,
+            visibilityClaims: []
         ))
         let model = AppModel(
             personalRoots: [repoB.path, repoA.path],
@@ -805,7 +808,8 @@ final class AppModelTests: XCTestCase {
             schemaVersion: RegistryDocument.currentSchemaVersion,
             projectScanRoots: [],
             sourceMappings: [:],
-            checkoutObservations: [repo.path: observation]
+            checkoutObservations: [repo.path: observation],
+            visibilityClaims: []
         ))
         let staleFacts = CheckoutGitFacts(
             checkoutPath: repo.path,
@@ -899,7 +903,8 @@ final class AppModelTests: XCTestCase {
             schemaVersion: RegistryDocument.currentSchemaVersion,
             projectScanRoots: [],
             sourceMappings: [:],
-            checkoutObservations: [repo.path: observation]
+            checkoutObservations: [repo.path: observation],
+            visibilityClaims: []
         ))
         let reboundFacts = checkoutFacts(
             path: repo.path,
@@ -1082,7 +1087,8 @@ final class AppModelTests: XCTestCase {
                     remoteTipSHA: target,
                     identityDigest: digest
                 ),
-            ]
+            ],
+            visibilityClaims: []
         ))
         let git = FakeUpdateGitClient(
             localFacts: localFacts,
@@ -1346,7 +1352,8 @@ final class AppModelTests: XCTestCase {
                     remoteTipSHA: observedTip,
                     identityDigest: digest
                 ),
-            ]
+            ],
+            visibilityClaims: []
         ))
         let git = FakeUpdateGitClient(
             localFacts: localFacts,
@@ -1464,7 +1471,8 @@ final class AppModelTests: XCTestCase {
                     remoteTipSHA: observedTip,
                     identityDigest: digest
                 ),
-            ]
+            ],
+            visibilityClaims: []
         ))
         let git = FakeUpdateGitClient(
             localFacts: localFacts,
@@ -1549,7 +1557,8 @@ final class AppModelTests: XCTestCase {
                     remoteTipSHA: target,
                     identityDigest: digest
                 ),
-            ]
+            ],
+            visibilityClaims: []
         ))
         let git = FakeUpdateGitClient(
             localFacts: localFacts,
@@ -1754,7 +1763,8 @@ final class AppModelTests: XCTestCase {
                     remoteTipSHA: observedTipSHA,
                     identityDigest: digest
                 ),
-            ]
+            ],
+            visibilityClaims: []
         ))
         let git = FakeUpdateGitClient(
             localFacts: localFacts,

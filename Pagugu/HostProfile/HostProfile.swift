@@ -2,12 +2,13 @@ import Foundation
 
 // L3 COORD: Pagugu/HostProfile/HostProfile.swift
 // POS: HostProfile 模块。owns Agent Host、受支持 Skill 根、同名冲突规则、Exposure Level 与能力矩阵，
-//      以及路径到 Agent Host 的确定性归属。does not own Discovery 遍历、Host 配置 IO、Skill Identity 或 UI 投影。
+//      以及路径到 Agent Host 的确定性归属；AgentHost / ExposureLevel 的 rawValue 是 Registry v2 稳定编码值。
+//      does not own Discovery 遍历、Host 配置 IO、Skill Identity 或 UI 投影。
 // TEST: repo://PaguguTests/DiscoveryPiRootsTests.swift、repo://PaguguTests/NameCollisionTests.swift、
-//       repo://PaguguTests/HostConfigReaderTests.swift。
+//       repo://PaguguTests/HostConfigReaderTests.swift、repo://PaguguTests/RegistryV2Tests.swift。
 
 /// 首批支持的 Agent Host。
-enum AgentHost: String, CaseIterable, Hashable, Sendable, Comparable {
+enum AgentHost: String, CaseIterable, Codable, Hashable, Sendable, Comparable {
     case claude = "claude"
     case codex = "codex"
     case pi = "pi"

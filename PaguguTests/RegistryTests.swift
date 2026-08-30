@@ -100,7 +100,8 @@ final class RegistryTests: XCTestCase {
                 ),
             ],
             sourceMappings: [:],
-            checkoutObservations: [:]
+            checkoutObservations: [:],
+            visibilityClaims: []
         ))
         let reloaded = AppRegistry(
             persistence: persistence,
@@ -246,7 +247,13 @@ final class RegistryTests: XCTestCase {
                     repositoryRelativePath: "skills/example"
                 ),
             ],
-            checkoutObservations: ["/checkout": observation]
+            checkoutObservations: ["/checkout": observation],
+            visibilityClaims: [VisibilityClaim(
+                skillSourceKey: "example.com/repo",
+                repositoryRelativePath: "skills/example",
+                host: .claude,
+                exposureLevel: .explicitOnly
+            )]
         ))
         let registry = AppRegistry(
             persistence: persistence,
@@ -263,6 +270,7 @@ final class RegistryTests: XCTestCase {
         XCTAssertTrue(document.projectScanRoots.isEmpty)
         XCTAssertEqual(document.sourceMappings.count, 1)
         XCTAssertEqual(document.checkoutObservations.count, 1)
+        XCTAssertEqual(document.visibilityClaims.count, 1)
         XCTAssertTrue(fileManager.fileExists(atPath: root.path))
     }
 
@@ -336,7 +344,8 @@ final class RegistryTests: XCTestCase {
                 ProjectScanRootRecord(canonicalPath: container.path, asFoundPath: container.path),
             ],
             sourceMappings: [:],
-            checkoutObservations: [:]
+            checkoutObservations: [:],
+            visibilityClaims: []
         ))
         let registry = AppRegistry(
             persistence: persistence,
