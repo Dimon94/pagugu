@@ -6,7 +6,7 @@ Related: repo://CONTEXT.md、repo://docs/adr/0002-skill-source-mapping.md、repo
 
 ## Context
 
-调用面调控要求 Pagugu 修改 Agent Host 的配置文件：Claude Code 的 settings.json（`skillOverrides`，四档：`on` / `name-only` / `user-invocable-only` / `off`，v2.1.129+）与 Codex 的 `~/.codex/config.toml`（`[[skills.config]] enabled = false`，仅全禁用；「仅显式」通道 `allow_implicit_invocation` 文档与 issue 相互矛盾，标 Unknown 不做）。这些 schema 当前来自搜索合成，实现前必须对官方文档原文核实。
+调用面调控要求 Pagugu 修改 Agent Host 的配置文件：Claude Code 的 settings.json（`skillOverrides`，四档：`on` / `name-only` / `user-invocable-only` / `off`，v2.1.129+）与 Codex 的 `~/.codex/config.toml`（`[[skills.config]] enabled = false`，全禁用）及 Skill 内 `agents/openai.yaml`（`policy.allow_implicit_invocation = false`，仅显式）。Codex 两条 schema 已由官方 Agent Skills 文档核实；Claude `skillOverrides` 已由官方 Claude Code Skills 文档核实。写通道仍必须保持本 ADR 的结构化合并与保全约束。
 
 宿主配置文件是共享所有权：用户会手改，宿主自己会重写。Pagugu 的可见性主张与文件事实可能分歧。需要裁决写入方式、原始配置保全、恢复能力与冲突语义。Pi 侧不写宿主配置，见 repo://docs/adr/0011-pagugu-owned-pi-extension.md。
 
@@ -26,7 +26,7 @@ Pagugu 只增删自己负责的 key（如 `skillOverrides` 中由 Pagugu 写入�
 
 ### 4. 能力缺口 fail closed
 
-宿主不支持某调用面档位时，该档写入口禁用并标注原因（如「Codex 不支持仅显式」）；绝不静默降级为其他档位（如用「全禁用」冒充「仅显式」）。Unknown 通道不实现。Codex 将来证实新通道时为其 Host Profile 加档，是纯加法。
+宿主不支持某调用面档位时，该档写入口禁用并标注原因（如 Codex 与 Pi 不支持「降级曝光」）；绝不静默降级为其他档位（如用「全禁用」冒充「仅显式」）。当前 Host Profile：Claude Code 支持四档；Codex 支持完全暴露、仅显式、全禁用；Pi 支持完全暴露、仅显式，且「全禁用」在 ADR-0011 的 spike 完成前保持 Unknown/Unsupported。
 
 ### 5. 可见性主张是 App Registry 的第四类 owns
 
@@ -52,4 +52,4 @@ Pagugu 只增删自己负责的 key（如 `skillOverrides` 中由 Pagugu 写入�
 
 - 本 ADR 冻结：合并写底线、单槽备份与单动作恢复、文件事实优先、能力缺口 fail closed、Registry 第四类 owns、不写 Skill 内容。
 - 不裁决：UI 形态、各宿主写入器实现细节、备份文件的具体命名与位置（归后续票据）。
-- 配置 schema 未对官方原文核实前，写通道实现不得开工；只读呈现不受此限。宿主未来变更配置 schema 时立新 ADR supersede 本记录。
+- 宿主未来变更配置 schema 时立新 ADR supersede 本记录；写通道必须基于实现时的官方合同继续核实保格式修改边界。

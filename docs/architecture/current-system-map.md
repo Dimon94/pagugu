@@ -1,13 +1,13 @@
 # Current System Map
 
-Status: runnable discovery（Claude Code / Codex / Pi）、Host Profile 同名冲突只读诊断、全量手动 Check Run、freshness 重推导、安全 Update Run 成功/失败/取消路径、App 级 run 互斥、12 态裁决、目录状态投影、manual source mapping 与主窗口全流程 UI 接线（更新确认、结果区六类反馈、多检出当次选择）
+Status: runnable discovery（Claude Code / Codex / Pi）、Host Profile 同名冲突只读诊断、调用面配置实时只读呈现（含 Unsupported/读取失败）、全量手动 Check Run、freshness 重推导、安全 Update Run 成功/失败/取消路径、App 级 run 互斥、12 态裁决、目录状态投影、manual source mapping 与主窗口全流程 UI 接线（更新确认、结果区六类反馈、多检出当次选择）
 
 本文件描述当前可验证的系统边界。产品动机、目标用户与目标体验见 repo://docs/product/vision.md。规划中的 Skill 扫描和更新能力不冒充现状。
 
 ## 当前事实
 
 - 产品：Pagugu，本地 macOS Agent Skill 管理与安全同步应用。
-- 当前阶段：可运行发现目录（四个 Personal Skill Root；覆盖 Claude Code、Codex 与 Pi）、按 Host Profile 派生的同名共存组徽标与 Claude 遮蔽/Codex-Pi 歧义诊断、逐检出实时 Git Fact、全量手动 Check Run、观察 freshness 与重启重推导、安全 Update Run（重查、冻结精确 SHA、确认/取消、ff-only、post-verify、九类失败、完整刷新）、Update start/terminal 与确认前 terminal-only 审计、审计呈现三语义面（工具栏「最近活动」摘要、详情、清空）与孤儿「结果未知（已中断）」呈现、审计损坏 fail-open「历史不可用」、Registry 重置 quarantine 备份路径呈现、App 级 Check/Update 单一互斥、12 态裁决、详情卡片、目录逐态短语/五档静默排序、Project Scan Root 管理与复制 Installation 的人工来源映射、主窗口 Update Run 全流程接线（逐检出更新 intent、多 Eligible 检出当次选择、冻结计划确认页含影响范围名单、结果区六类反馈横幅）。正式 Logo 已接入 AppIcon、状态栏和欢迎页；全部 app-owned 界面固定浅色并使用 DesignTokens 中的暖米白主题与品牌配色。ChunUI 兼容性验证已完成（不引入，见 docs/product/chunui-compatibility.md）。
+- 当前阶段：可运行发现目录（四个 Personal Skill Root；覆盖 Claude Code、Codex 与 Pi）、按 Host Profile 派生的同名共存组徽标与 Claude 遮蔽/Codex-Pi 歧义诊断、从 Claude JSON / Codex TOML+YAML / Pi 独占 JSON 实时读取逐宿主调用面档位并呈现 Unsupported/读取失败、逐检出实时 Git Fact、全量手动 Check Run、观察 freshness 与重启重推导、安全 Update Run（重查、冻结精确 SHA、确认/取消、ff-only、post-verify、九类失败、完整刷新）、Update start/terminal 与确认前 terminal-only 审计、审计呈现三语义面（工具栏「最近活动」摘要、详情、清空）与孤儿「结果未知（已中断）」呈现、审计损坏 fail-open「历史不可用」、Registry 重置 quarantine 备份路径呈现、App 级 Check/Update 单一互斥、12 态裁决、详情卡片、目录逐态短语/五档静默排序、Project Scan Root 管理与复制 Installation 的人工来源映射、主窗口 Update Run 全流程接线（逐检出更新 intent、多 Eligible 检出当次选择、冻结计划确认页含影响范围名单、结果区六类反馈横幅）。正式 Logo 已接入 AppIcon、状态栏和欢迎页；全部 app-owned 界面固定浅色并使用 DesignTokens 中的暖米白主题与品牌配色。ChunUI 兼容性验证已完成（不引入，见 docs/product/chunui-compatibility.md）。
 - 技术栈：原生 Xcode macOS App、SwiftUI、Swift 6、macOS 14+。
 - 运行入口：`Pagugu/App/PaguguApp.swift`；稳定本地入口为 `script/build_and_run.sh`。
 - 分发：本地构建；App Sandbox 关闭。签名、公证和 GitHub Releases 尚未实现。
@@ -30,8 +30,9 @@ Status: runnable discovery（Claude Code / Codex / Pi）、Host Profile 同名�
       -> Registry 读观察单槽；Eligibility 校验身份与新鲜度
       -> 新鲜成功观察触发 after-successful-check inspection 并按固定 precedence 裁决
       -> Registry durable 来源映射/观察单槽 + Audit best-effort 映射与 Check Run terminal 证据
-      -> HostProfile 纯函数按规范化名称产生同名共存组与逐宿主诊断
-      -> AppModel 发布 Skill Read Model（同名共存组徽标/诊断；逐态目录短语；需要处理 → 可更新 → 尚未检查 → 无需更新 → 仅本地）
+      -> HostProfile 纯函数按规范化名称产生同名共存组/逐宿主诊断，并提供调用面能力矩阵
+      -> HostConfigReader 每次发布重读宿主配置，派生逐已安装宿主档位 / Unsupported / 读取失败
+      -> AppModel 发布 Skill Read Model（同名共存组徽标/诊断；调用面只读投影；逐态目录短语；需要处理 → 可更新 → 尚未检查 → 无需更新 → 仅本地）
       -> Update intent 当次选择 Eligible Checkout
       -> AppModel 获取 App 级单一 run 互斥；Check/Update 入口同步禁用并解释
       -> Runs fetch 重查 → ready/noop/blocked；确认前阻断或失败写 terminal-only failed
@@ -49,11 +50,12 @@ Status: runnable discovery（Claude Code / Codex / Pi）、Host Profile 同名�
 | Module | Owns | Does not own | Public interface | Depends on | Verification |
 | --- | --- | --- | --- | --- | --- |
 | PaguguApp | 应用生命周期、固定浅色主窗口、正式 AppIcon 与可着色状态栏窗口场景 | Skill 扫描、Git 状态、持久化 | macOS App 入口 | SwiftUI、AppKit、Assets.xcassets | `script/build_and_run.sh --verify` |
-| ContentView | 主窗口 Variant F IA、暖米白根画布与窗口工具栏；在 Skill 与来源不明详情显示同名共存组徽标与逐宿主只读诊断；显示目录状态短语、唯一手动检查入口、结果区六类反馈横幅与逐检出卡片（含更新 intent）；更新确认 sheet（多检出当次选择 + 冻结计划 + 影响范围名单）；逐 Installation 来源映射、失效原因与删除确认；扫描范围管理、「最近活动」三语义面与 Registry 故障阻断 | Skill Read Model 派生、HostProfile 冲突规则重建、Checkout Git State/Run 裁决、目录排序、审计投影派生、IO、视觉令牌定义 | SwiftUI `View` | SwiftUI、AppModel、DesignTokens | App build |
+| ContentView | 主窗口 Variant F IA、暖米白根画布与窗口工具栏；在 Skill 与来源不明详情显示同名共存组诊断，以及逐宿主调用面档位、Unsupported 缺口与读取失败；显示目录状态短语、唯一手动检查入口、结果区六类反馈横幅与逐检出卡片（含更新 intent）；更新确认 sheet（多检出当次选择 + 冻结计划 + 影响范围名单）；逐 Installation 来源映射、失效原因与删除确认；扫描范围管理、「最近活动」三语义面与 Registry 故障阻断 | Skill Read Model 派生、HostProfile/HostConfig 规则重建、Checkout Git State/Run 裁决、目录排序、审计投影派生、IO、视觉令牌定义 | SwiftUI `View` | SwiftUI、AppModel、DesignTokens | App build |
 | MenuBarView | 暖米白状态栏窗口内的打开主窗口与退出动作 | 更新状态和后台调度 | SwiftUI `View` | SwiftUI、AppKit、DesignTokens | App build + launch |
 | DesignTokens | app-owned 界面视觉令牌（品牌与暖米白全局画布、间距、圆角、尺寸、字号、语义状态色、表面材质、按压反馈） | 业务状态裁决、ChunUI、IA 语义 | `DesignTokens` enum、`PressFeedbackButtonStyle` | SwiftUI | `PaguguTests` 令牌不变量 |
 | AppIdentity | 产品展示名、Bundle ID、主窗口 ID | 用户配置 | 静态常量 | Swift 标准库 | `PaguguTests.testProductIdentity` |
-| HostProfile | Claude Code、Codex、Pi 的宿主标识、Personal/Project 根归因、默认 Personal Skill Root 集合、同名共存组与逐宿主诊断（全部纯函数） | 文件系统扫描、Skill Identity/Installation 聚合、UI 投影、宿主配置读写与调用面档位 | `HostProfiles.personalSkillRoots()`、`HostProfiles.hosts(for:scope:)`、`NameCollisionEngine.groups(from:)` | Foundation | `PaguguTests/DiscoveryPiRootsTests.swift`、`NameCollisionTests.swift` |
+| HostProfile | Claude Code、Codex、Pi 的宿主标识、Personal/Project 根归因、默认 Personal Skill Root 集合、同名共存组规则、四档 Exposure Level 与逐宿主能力矩阵（全部纯函数） | 文件系统扫描、Skill Identity/Installation 聚合、UI 投影、宿主配置读写与当前档位 | `HostProfiles.personalSkillRoots()`、`HostProfiles.hosts(for:scope:)`、`HostProfile.supports(_:)`、`NameCollisionEngine.groups(from:)` | Foundation | `PaguguTests/DiscoveryPiRootsTests.swift`、`NameCollisionTests.swift`、`HostConfigReaderTests.swift` |
+| HostConfig | Claude Code `settings.json`、Codex `config.toml`/`agents/openai.yaml` 与 Pi 独占 `visibility.json` 的实时窄读取；结合 HostProfile 输出档位、Unsupported 或读取失败 | 配置写入、主张/备份/分歧、缓存、文件监听、UI | `HostConfigReader.invocationSurfaces(skillName:installations:)` | Foundation、HostProfile/Identity 值类型 | `PaguguTests/HostConfigReaderTests.swift`、`AppModelSurfaceTests.swift` |
 | Discovery | Discovery Scan：遍历全部 Scan Root、发现入口标注；Project Scan Root 集中排除 `.git`、依赖与构建产物目录并设 10 层深度保险，denylist 命中记 Scan Issue 但仍为 complete，第 11 层截断记 Issue/partial；软链接解析、Canonical Path 去重防环、SKILL.md 解析校验（name 缺失/空白时回退安装目录名）与原文读取、Git 工作树根检测（`.git` 存在性）、复制投影内容指纹（SHA-256，fail closed） | 宿主规则与冲突诊断（归 HostProfile）、身份归因与指纹聚合（归 Identity）、Git 子进程 | `Discovery.personalSkillRoots`、`scanAll(personalRoots:projectRoots:)`、`scanPersonalRoots(_:)`、`scanProjectRoot(_:)`、`skillMarkdown(atCanonicalPath:)`、`contentFingerprint(ofSkillAtCanonicalPath:)` | Foundation、CryptoKit、HostProfile | `PaguguTests/DiscoveryTests.swift`、`DiscoveryPiRootsTests.swift` |
 | Identity | Skill Source Key 规范化、人工映射重验证、消费 HostProfile 归因并保留逐 Installation scope、按身份聚合、Skill Source Checkout、同一 remote 多检出及逐检出 Skill 成员清单（全部纯函数） | 宿主规则与冲突诊断、文件系统遍历、Git 调用、状态裁决与主张写入 | `SkillSourceKey.normalize(remoteURL:)`、`SkillDirectory.contents(from:gitFactsByCheckoutPath:mappings:)` | Foundation、HostProfile/Discovery/Git/Persistence 值类型 | `PaguguTests/IdentityTests.swift`、`AppModelTests.swift` |
 | Git | 唯一 Git 子进程 seam；非交互环境、timeout、exit/stderr 与锁冲突原语归一化；实时正交 Checkout Git Fact、单 upstream fetch、精确 SHA ff-only、在途进程尽力终止 | Checkout Git State、失败九类与 Eligible Update 裁决、检查/更新编排 | `GitInspecting.inspectCheckout(at:scope:)`、`GitExecuting.fetch(remote:upstreamRef:at:)`、`fastForward(to:at:)`、`terminateInFlight()` | Foundation、OS、本机 git | `PaguguTests/GitEligibilityTests.swift` |
@@ -62,7 +64,7 @@ Status: runnable discovery（Claude Code / Codex / Pi）、Host Profile 同名�
 | Persistence | registry.json 与 audit-history.json 的唯一物理 IO、v1 持久记录、双 fsync 原子写、quarantine、Registry 外部修改检测；Update started/terminal 以 run ID 关联并校验 phase/outcome/payload 配对，failed reason 只接受 schema 的九个稳定 wire code（测试锁定与 Runs rawValue 集合一致） | 三类主张、失败九类与审计记录的业务语义、Git/Discovery/Eligibility | Registry load/save/reset、Audit load/append/clear | Foundation、Darwin | `PaguguTests/PersistenceTests.swift`、`RegistryTests.swift` |
 | Audit | 来源映射、Check Run terminal 与 Update Run started/success/cancelled/failed terminal 的窄 append 语义入口；写入/读取失败 fail-open；呈现投影派生（两段折叠、孤儿 interrupted-unknown、「历史不可用」） | 文件 IO、当前主张、恢复、执行许可 | `recordSourceMapping(...)`、`recordCheckRun(...)`、`recordUpdateStarted(...)`、`recordUpdateSucceeded(...)`、`recordUpdateCancelled(...)`、`recordUpdateFailed(...)`、`history()`、`clearHistory()`、`AuditPresentation.project(_:)` | Persistence、Foundation | `PaguguTests/RegistryTests.swift`、`CheckRunTests.swift`、`AppModelTests.swift` |
 | Runs | Check Run 编排；Update Run fetch 重查、精确计划、确认取消、漂移比对、ff-only、post-verify、九类失败归一化与 terminal 审计；run 瞬态 | Git/观察物理 IO、UI 投影、第二把互斥锁 | `CheckRunner.startCheck(scope:)`、`UpdateRunner.prepareUpdate(request:)`、`cancelPrepared(_:)`、`executeConfirmed(_:)` | Git、Eligibility、Registry、Audit | `PaguguTests/CheckRunTests.swift` |
-| AppModel | @MainActor composition root：启动/刷新、App 级单一 run 互斥（preparing / awaiting-confirmation / executing / cancelling）、Check/Update intent、取消/失败/禁用原因投影，按实时事实重推导 freshness；确认页取消后在新的成功检查前忽略目标检出的旧观察并固定投影 check-unknown；发布逐检出、映射、同名共存组徽标与逐宿主诊断、目录逐态短语与五档静默排序投影；审计历史投影与清空 intent、重置备份路径呈现；受限恢复退出 intent | 直接 Git/文件系统/持久 IO、Checkout Git State/映射有效性/执行规则重建 | 启动/重扫、`checkNow()`、Eligible 检出候选、`prepareUpdate(...)`、`confirmUpdate()`、`cancelUpdate()`、Project Scan Root/来源映射 CRUD、Registry reset、`requestQuit()`、`clearAuditHistory(confirmed:)` | Registry、Audit、HostProfile、Discovery、Git、Identity、Eligibility、Runs | `PaguguTests/AppModelTests.swift`、`AppModelCollisionTests.swift` |
+| AppModel | @MainActor composition root：启动/刷新、App 级单一 run 互斥（preparing / awaiting-confirmation / executing / cancelling）、Check/Update intent、取消/失败/禁用原因投影，按实时事实重推导 freshness；确认页取消后在新的成功检查前忽略目标检出的旧观察并固定投影 check-unknown；每次发布经 HostConfigReader 重读并发布逐 Skill/来源不明条目的调用面只读投影，同时发布逐检出、映射、同名共存组、目录逐态短语与五档静默排序投影；审计历史投影与清空 intent、重置备份路径呈现；受限恢复退出 intent | 直接 Host 配置/Git/文件系统/持久 IO、调用面/Checkout Git State/映射有效性/执行规则重建 | 启动/重扫、`checkNow()`、Eligible 检出候选、`prepareUpdate(...)`、`confirmUpdate()`、`cancelUpdate()`、Project Scan Root/来源映射 CRUD、Registry reset、`requestQuit()`、`clearAuditHistory(confirmed:)` | Registry、Audit、HostConfig、HostProfile、Discovery、Git、Identity、Eligibility、Runs | `PaguguTests/AppModelTests.swift`、`AppModelCollisionTests.swift`、`AppModelSurfaceTests.swift` |
 | build_and_run.sh | kill、build、launch、进程验证 | 签名、公证、发布 | `run|--debug|--logs|--telemetry|--verify` | `xcodebuild`、macOS CLI | `--verify` |
 
 ## 产品不变量
@@ -73,6 +75,7 @@ Status: runnable discovery（Claude Code / Codex / Pi）、Host Profile 同名�
 - 只有 Checkout Git State 为 update-available 的 Skill Source Checkout 才允许更新：inspection 成功、upstream 身份与 Skill Source Key 一致、无兄弟 worktree 冲突、严格干净、存在成功检查结果且 behind-only。一次更新只作用于一个明确选定的物理工作树，禁止自动同步全部 clone 与 worktree。
 - 其余 11 个 Checkout Git State（inspection-failed、no-remote、detached、no-upstream、upstream-mismatch、sibling-conflict、check-unknown、dirty、diverged、ahead-only、up-to-date），以及 Unattributed Installation、失效映射与不完整 Scan Result，必须 fail closed，各配人工恢复方向；同一 Skill Source Key 下其他检出的状态本身不阻断更新。
 - 同名共存组按 trim + 大小写折叠后的 frontmatter `name` 聚合；name 缺失或空白时回退安装目录名。它只做展示与诊断，不参与 Skill Identity、来源归因、去重、映射或更新资格。同名异源本身不阻断更新。Claude Code 的 Personal 同名安装遮蔽 Project；Codex 与 Pi 的同名位置共存为歧义。`~/.agents/skills` 在 Personal scope 同时服务 Codex 与 Pi，在 Project scope 只归 Codex。
+- 调用面只读投影每次刷新都以宿主文件为当前事实；文件缺失表示宿主默认完全暴露，已存在但不可读或损坏必须呈现「读取失败」。Host Profile 不支持的档位必须呈现 Unsupported，不得静默降级；读取结果不写 Registry、不改变 Skill Identity 或更新资格。
 - Pagugu 不直接覆盖未知所有权的安装目录。
 - UI、缓存、日志和 App Registry 均不能成为 Skill 内容或 Git 状态的第二真相；Checkout Git State 由实时 Git Fact 确定性派生，上次观察结果不充当当前 Git 事实。
 - 审计证据（Audit Evidence）是 append-only 历史证据集合，只记录用户发起的 Update Run、Check Run 与来源映射维护动作及其终态结果；它永不充当当前 Git 状态、Eligible Update、Checkout Observation freshness、执行许可、自动恢复、自动重试或回滚依据（repo://docs/adr/0007-audit-evidence-and-recovery-presentation.md）。

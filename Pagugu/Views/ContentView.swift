@@ -5,8 +5,8 @@ import UniformTypeIdentifiers
 // POS: 主窗口内容（Variant F 主从结构，#16 落地目录 IA，#20 落地目录状态短语与静默排序，#27 接线 Update Run）。
 //      左侧：平铺目录——来源仓库行（可收起/展开子 Skill 行，默认展开，chevron 独立热区）
 //      + 无仓库可归行（来源不明）；消费 Skill Read Model 给出的逐态短语与五档顺序；无分组标题、无筛选 UI。
-//      右侧：Skill 详情呈现同名共存组徽标与逐宿主诊断，以及状态与检出、安装位置、来源标识、
-//      SKILL.md 原文只读可选中、更新动作；
+//      右侧：Skill 详情呈现同名共存组徽标与逐宿主诊断、调用面实时只读档位与 Unsupported 缺口，
+//      以及状态与检出、安装位置、来源标识、SKILL.md 原文只读可选中、更新动作；
 //      空选择回欢迎引导。「相关记录」经工具栏「最近活动」承载。
 //      检出卡逐检出提供「更新…」intent（仅 update-available 可用，其余禁用并给出原因）；
 //      确认页列出 Skill Identity、目标检出、branch/upstream、当前 HEAD → 精确 target SHA、behind 数、
@@ -20,6 +20,7 @@ import UniformTypeIdentifiers
 //      全部视觉常量消费 DesignTokens（repo://Pagugu/Views/DesignTokens.swift），不逐组件手写冲突值。
 //      View 只消费 Skill Read Model 与审计投影、只发 AppModel intent，不做 IO。
 // TEST: repo://PaguguTests/AppModelTests.swift（投影与 intent smoke）；
+//       repo://PaguguTests/AppModelSurfaceTests.swift（调用面只读投影）；
 //       repo://PaguguTests/PaguguTests.swift（ContentView 构造、确认页完整 SHA、DesignTokens、受限恢复退出不直接 terminate）。
 
 struct ContentView: View {
@@ -187,6 +188,7 @@ struct ContentView: View {
                 SkillDetailPanel(
                     entry: entry,
                     nameCollision: model.readModel.nameCollision(for: entry.id),
+                    invocationSurfaces: model.readModel.invocationSurfaces(for: entry.id),
                     checkouts: model.readModel.checkoutCards(for: entry.id.sourceKey),
                     markdown: model.skillMarkdown(canonicalPath: entry.canonicalPath),
                     canStartUpdate: model.canStartUpdateRun,
@@ -219,6 +221,9 @@ struct ContentView: View {
                 UnattributedInstallationPanel(
                     item: item,
                     nameCollision: model.readModel.nameCollision(forUnattributedInstallationID: item.id),
+                    invocationSurfaces: model.readModel.invocationSurfaces(
+                        forUnattributedInstallationID: item.id
+                    ),
                     markdown: model.skillMarkdown(canonicalPath: item.canonicalPath)
                 )
             } else {
@@ -1109,6 +1114,7 @@ private struct SkillSourcePanel: View {
 private struct SkillDetailPanel: View {
     let entry: SkillDirectoryEntry
     let nameCollision: NameCollisionReadModel?
+    let invocationSurfaces: [HostInvocationSurface]
     let checkouts: [CheckoutCardReadModel]
     let markdown: String?
     let canStartUpdate: Bool
@@ -1129,6 +1135,8 @@ private struct SkillDetailPanel: View {
                 if let nameCollision {
                     NameCollisionBlock(collision: nameCollision)
                 }
+
+                InvocationSurfaceBlock(surfaces: invocationSurfaces)
 
                 CheckoutStatusBlock(
                     checkouts: checkouts,
@@ -1192,6 +1200,64 @@ private struct NameCollisionBlock: View {
                     .font(DesignTokens.Fonts.rowTitle)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+}
+
+// MARK: - 详情块：调用面（实时只读；能力缺口不静默降级）
+
+private struct InvocationSurfaceBlock: View {
+    let surfaces: [HostInvocationSurface]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.block) {
+            Text("调用面（Invocation Surface）")
+                .font(DesignTokens.Fonts.heading)
+            if surfaces.isEmpty {
+                Text("未安装到任何 Agent Host。")
+                    .font(DesignTokens.Fonts.caption)
+                    .foregroundStyle(DesignTokens.Status.neutral)
+            }
+            ForEach(surfaces) { surface in
+                VStack(alignment: .leading, spacing: DesignTokens.Space.tight) {
+                    HStack {
+                        Text(surface.host.displayName)
+                            .font(DesignTokens.Fonts.rowTitle)
+                        Spacer()
+                        Text(stateText(surface.state))
+                            .font(DesignTokens.Fonts.rowTitle)
+                            .foregroundStyle(stateColor(surface.state))
+                    }
+                    if !surface.unsupportedLevels.isEmpty {
+                        Text("档位缺口：" + surface.unsupportedLevels
+                            .map { "\($0.displayName)（Unsupported）" }
+                            .joined(separator: "、"))
+                            .font(DesignTokens.Fonts.caption)
+                            .foregroundStyle(DesignTokens.Status.warning)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(DesignTokens.Space.cardPadding)
+                .background(
+                    DesignTokens.Surface.card,
+                    in: RoundedRectangle(cornerRadius: DesignTokens.Radius.card)
+                )
+            }
+        }
+    }
+
+    private func stateText(_ state: HostInvocationSurfaceState) -> String {
+        switch state {
+        case .level(let level): return level.displayName
+        case .unsupported(let level): return "\(level.displayName)（Unsupported）"
+        case .readFailed: return "读取失败"
+        }
+    }
+
+    private func stateColor(_ state: HostInvocationSurfaceState) -> Color {
+        switch state {
+        case .level: return DesignTokens.Status.neutral
+        case .unsupported, .readFailed: return DesignTokens.Status.warning
         }
     }
 }
@@ -1443,6 +1509,7 @@ private struct CheckoutCard: View {
 private struct UnattributedInstallationPanel: View {
     let item: UnattributedInstallationItem
     let nameCollision: NameCollisionReadModel?
+    let invocationSurfaces: [HostInvocationSurface]
     let markdown: String?
 
     var body: some View {
@@ -1457,6 +1524,8 @@ private struct UnattributedInstallationPanel: View {
                 if let nameCollision {
                     NameCollisionBlock(collision: nameCollision)
                 }
+
+                InvocationSurfaceBlock(surfaces: invocationSurfaces)
 
                 InstallationsBlock(installations: item.installations)
 

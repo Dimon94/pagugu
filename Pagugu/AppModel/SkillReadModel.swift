@@ -2,9 +2,10 @@ import Foundation
 
 // L3 COORD: Pagugu/AppModel/SkillReadModel.swift
 // POS: AppModel 模块（ADR-0009 §7）。owns Skill Read Model、来源映射投影、Check Run 投影、
-//      同名共存组徽标与逐宿主诊断、目录状态短语与五档排序。
+//      同名共存组徽标与逐宿主诊断、调用面只读投影、目录状态短语与五档排序。
 // TEST: repo://PaguguTests/AppModelTests.swift（投影形状、来源映射、Check Run、目录状态短语与排序表测试）；
-//       repo://PaguguTests/AppModelCollisionTests.swift（同名诊断只读投影、目录名回退与更新资格隔离）。
+//       repo://PaguguTests/AppModelCollisionTests.swift（同名诊断只读投影、目录名回退与更新资格隔离）；
+//       repo://PaguguTests/AppModelSurfaceTests.swift（调用面实时只读投影）。
 
 /// Skill Read Model：AppModel 发布的只读投影，View 只消费不重建。
 struct SkillReadModel: Sendable {
@@ -26,6 +27,9 @@ struct SkillReadModel: Sendable {
     private let checkoutCardsBySource: [SkillSourceKey: [CheckoutCardReadModel]]
     /// 按 Skill/来源不明条目保存同名共存组徽标与逐宿主诊断。
     private let nameCollisionsByMemberID: [String: NameCollisionReadModel]
+    /// HostConfigReader 实时文件事实的只读投影；不参与身份、更新资格或持久化。
+    private let invocationSurfacesBySkillIdentity: [SkillIdentity: [HostInvocationSurface]]
+    private let invocationSurfacesByUnattributedID: [String: [HostInvocationSurface]]
     /// 是否为空态（无任何 Skill 且无 Issue）。
     let isEmpty: Bool
 
@@ -50,7 +54,9 @@ struct SkillReadModel: Sendable {
         issues: [ScanIssue],
         scanOutcome: ScanOutcome,
         projectScanRoots: [ProjectScanRoot] = [],
-        checkoutCardsBySource: [SkillSourceKey: [CheckoutCardReadModel]] = [:]
+        checkoutCardsBySource: [SkillSourceKey: [CheckoutCardReadModel]] = [:],
+        invocationSurfacesBySkillIdentity: [SkillIdentity: [HostInvocationSurface]] = [:],
+        invocationSurfacesByUnattributedID: [String: [HostInvocationSurface]] = [:]
     ) {
         self.sources = sources
         self.unattributedInstallations = unattributedInstallations
@@ -60,6 +66,8 @@ struct SkillReadModel: Sendable {
         self.scanOutcome = scanOutcome
         self.projectScanRoots = projectScanRoots
         self.checkoutCardsBySource = checkoutCardsBySource
+        self.invocationSurfacesBySkillIdentity = invocationSurfacesBySkillIdentity
+        self.invocationSurfacesByUnattributedID = invocationSurfacesByUnattributedID
         self.nameCollisionsByMemberID = Self.makeNameCollisionPresentations(
             sources: sources,
             unattributedInstallations: unattributedInstallations
@@ -188,6 +196,14 @@ struct SkillReadModel: Sendable {
 
     func nameCollision(forUnattributedInstallationID id: String) -> NameCollisionReadModel? {
         nameCollisionsByMemberID[Self.unattributedCollisionMemberID(id)]
+    }
+
+    func invocationSurfaces(for identity: SkillIdentity) -> [HostInvocationSurface] {
+        invocationSurfacesBySkillIdentity[identity] ?? []
+    }
+
+    func invocationSurfaces(forUnattributedInstallationID id: String) -> [HostInvocationSurface] {
+        invocationSurfacesByUnattributedID[id] ?? []
     }
 
     private static func makeNameCollisionPresentations(

@@ -30,6 +30,9 @@
 		D51000000000000000000001 /* DiscoveryPiRootsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D51000000000000000000002 /* DiscoveryPiRootsTests.swift */; };
 		D51000000000000000000003 /* NameCollisionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D51000000000000000000004 /* NameCollisionTests.swift */; };
 		D51000000000000000000007 /* AppModelCollisionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D51000000000000000000008 /* AppModelCollisionTests.swift */; };
+		D52000000000000000000001 /* HostConfigReaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D52000000000000000000002 /* HostConfigReaderTests.swift */; };
+		D52000000000000000000003 /* HostConfigReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = D52000000000000000000004 /* HostConfigReader.swift */; };
+		D52000000000000000000005 /* AppModelSurfaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D52000000000000000000006 /* AppModelSurfaceTests.swift */; };
 		D15A00000000000000000012 /* SkillIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15A00000000000000000011 /* SkillIdentity.swift */; };
 		D15A00000000000000000002 /* IdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15A00000000000000000001 /* IdentityTests.swift */; };
 		2F2190FFC541C404FC060850 /* PaguguTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4E55B78FCEBA348B72F43A4 /* PaguguTests.swift */; };
@@ -76,6 +79,9 @@
 		D51000000000000000000002 /* DiscoveryPiRootsTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DiscoveryPiRootsTests.swift; sourceTree = "<group>"; };
 		D51000000000000000000004 /* NameCollisionTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NameCollisionTests.swift; sourceTree = "<group>"; };
 		D51000000000000000000008 /* AppModelCollisionTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppModelCollisionTests.swift; sourceTree = "<group>"; };
+		D52000000000000000000002 /* HostConfigReaderTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HostConfigReaderTests.swift; sourceTree = "<group>"; };
+		D52000000000000000000004 /* HostConfigReader.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = HostConfigReader.swift; path = HostConfig/HostConfigReader.swift; sourceTree = "<group>"; };
+		D52000000000000000000006 /* AppModelSurfaceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppModelSurfaceTests.swift; sourceTree = "<group>"; };
 		D15A00000000000000000011 /* SkillIdentity.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SkillIdentity.swift; path = Identity/SkillIdentity.swift; sourceTree = "<group>"; };
 		D15A00000000000000000001 /* IdentityTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = IdentityTests.swift; sourceTree = "<group>"; };
 		09BE7DE72F107FBC97261DC7 /* ContentView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ContentView.swift; path = Views/ContentView.swift; sourceTree = "<group>"; };
@@ -169,6 +175,7 @@
 				D15A00000000000000000022 /* SkillDiscovery.swift */,
 				D15A00000000000000000032 /* HostProfile.swift */,
 				D51000000000000000000006 /* NameCollision.swift */,
+				D52000000000000000000004 /* HostConfigReader.swift */,
 				D15A00000000000000000034 /* SkillDirectoryEntry.swift */,
 				D15A00000000000000000042 /* SkillDirectory.swift */,
 				D15A00000000000000000052 /* SkillReadModel.swift */,
@@ -201,6 +208,8 @@
 				D51000000000000000000002 /* DiscoveryPiRootsTests.swift */,
 				D51000000000000000000004 /* NameCollisionTests.swift */,
 				D51000000000000000000008 /* AppModelCollisionTests.swift */,
+				D52000000000000000000002 /* HostConfigReaderTests.swift */,
+				D52000000000000000000006 /* AppModelSurfaceTests.swift */,
 				D15A00000000000000000062 /* AppModelTests.swift */,
 				D19000000000000000000002 /* GitEligibilityTests.swift */,
 				D21000000000000000000002 /* CheckRunTests.swift */,
@@ -310,6 +319,7 @@
 				D15A00000000000000000021 /* SkillDiscovery.swift in Sources */,
 				D15A00000000000000000031 /* HostProfile.swift in Sources */,
 				D51000000000000000000005 /* NameCollision.swift in Sources */,
+				D52000000000000000000003 /* HostConfigReader.swift in Sources */,
 				D15A00000000000000000033 /* SkillDirectoryEntry.swift in Sources */,
 				D15A00000000000000000041 /* SkillDirectory.swift in Sources */,
 				D15A00000000000000000051 /* SkillReadModel.swift in Sources */,
@@ -332,6 +342,8 @@
 				D51000000000000000000001 /* DiscoveryPiRootsTests.swift in Sources */,
 				D51000000000000000000003 /* NameCollisionTests.swift in Sources */,
 				D51000000000000000000007 /* AppModelCollisionTests.swift in Sources */,
+				D52000000000000000000001 /* HostConfigReaderTests.swift in Sources */,
+				D52000000000000000000005 /* AppModelSurfaceTests.swift in Sources */,
 				D15A00000000000000000061 /* AppModelTests.swift in Sources */,
 				D19000000000000000000001 /* GitEligibilityTests.swift in Sources */,
 				D21000000000000000000001 /* CheckRunTests.swift in Sources */,

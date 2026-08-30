@@ -142,6 +142,4 @@ _Avoid_: 把某一宿主的规则当作所有宿主的默认。
 - 托管插件来源的首批支持范围。
 - 签名、公证与 GitHub Releases 发布流程。
 - 专业商标可用性。
-- Codex 的「仅显式」通道（`allow_implicit_invocation`）文档与 issue 相互矛盾，是否存在待核实。
 - Pi 侧「全禁用」档位待验证：Pagugu 自带扩展能否连显式 `/skill:name` 也移除。
-- Claude Code 与 Codex 的调用面配置 schema（`skillOverrides`、`[[skills.config]]`）当前来自搜索合成，写入通道实现前需对官方文档原文核实。

@@ -4,14 +4,15 @@ import Foundation
 // OUTPUT: AppModel UI intent/只读投影，以及只供 composition root 注入的 RegistryResetting reset seam。
 // POS: AppModel 模块（ADR-0009 §7）。@MainActor composition root：
 //      owns Skill Read Model、受限恢复与来源映射错误投影、目录收起、Check/Update 瞬态、全部 UI intent
-//      与启动/刷新编排；每次发布按实时事实重推导观察 freshness。取消确认或更新失败后，目标检出
+//      与启动/刷新编排；每次发布重读 HostConfig 调用面事实，并按实时 Git 事实重推导观察 freshness。
+//      取消确认或更新失败后，目标检出
 //      在新的成功检查前不再消费旧观察。审计历史投影只服务「最近活动」呈现；
 //      Registry reset 成功后呈现 quarantine 备份路径；受限恢复「退出自行修复」经 requestQuit 发出应用退出 intent。
-//      does not own 直接 Git/文件系统/持久 IO
-//      （经 Git/Discovery/Registry/Audit/Runs seam）、
+//      does not own 直接 Host 配置/Git/文件系统/持久 IO
+//      （经 HostConfig/Git/Discovery/Registry/Audit/Runs seam）、
 //      业务规则重建。
 // TEST: repo://PaguguTests/AppModelTests.swift（Registry gate、requestQuit 退出 intent、Project Scan Root intent、
-//      目录投影与 intent 路由 smoke、审计呈现投影）。
+//      目录投影与 intent 路由 smoke、审计呈现投影）；repo://PaguguTests/AppModelSurfaceTests.swift（调用面投影）。
 
 enum AppRun: Equatable, Sendable {
     case check
@@ -92,6 +93,7 @@ final class AppModel: ObservableObject {
     private let registry: AppRegistry
     private let registryResetter: any RegistryResetting
     private let audit: AuditEvidence
+    private let hostConfigReader: HostConfigReader
     private let gitInspector: any GitInspecting
     private let gitExecutor: any GitExecuting
     private let terminateApplication: () -> Void
@@ -106,6 +108,7 @@ final class AppModel: ObservableObject {
         persistence: Persistence = .live,
         gitInspector: any GitInspecting = GitClient(),
         gitExecutor: any GitExecuting = GitClient(),
+        hostConfigReader: HostConfigReader = HostConfigReader(),
         registryResetter: (any RegistryResetting)? = nil,
         terminateApplication: @escaping () -> Void = {}
     ) {
@@ -114,6 +117,7 @@ final class AppModel: ObservableObject {
         self.registry = registry
         self.registryResetter = registryResetter ?? registry
         self.audit = AuditEvidence(persistence: persistence)
+        self.hostConfigReader = hostConfigReader
         self.gitInspector = gitInspector
         self.gitExecutor = gitExecutor
         self.terminateApplication = terminateApplication
@@ -236,6 +240,28 @@ final class AppModel: ObservableObject {
             }
             return (source.id, cards)
         })
+        let invocationSurfacesBySkillIdentity = Dictionary(uniqueKeysWithValues:
+            contents.sources.flatMap(\.skills).map { entry in
+                (
+                    entry.id,
+                    hostConfigReader.invocationSurfaces(
+                        skillName: entry.displayName,
+                        installations: entry.installations
+                    )
+                )
+            }
+        )
+        let invocationSurfacesByUnattributedID = Dictionary(uniqueKeysWithValues:
+            contents.unattributedInstallations.map { item in
+                (
+                    item.id,
+                    hostConfigReader.invocationSurfaces(
+                        skillName: item.displayName,
+                        installations: item.installations
+                    )
+                )
+            }
+        )
         readModel = SkillReadModel(
             sources: contents.sources,
             unattributedInstallations: contents.unattributedInstallations,
@@ -244,7 +270,9 @@ final class AppModel: ObservableObject {
             issues: scanResult.issues,
             scanOutcome: scanResult.outcome,
             projectScanRoots: projectScanRoots,
-            checkoutCardsBySource: checkoutCardsBySource
+            checkoutCardsBySource: checkoutCardsBySource,
+            invocationSurfacesBySkillIdentity: invocationSurfacesBySkillIdentity,
+            invocationSurfacesByUnattributedID: invocationSurfacesByUnattributedID
         )
         checkScope = contents.sources.flatMap { source in
             source.checkouts.compactMap { checkout in
