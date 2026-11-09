@@ -33,16 +33,9 @@ Worktree 只检出 git 跟踪的源码，这部分开销小。真正的成本在
 
 ### 引用 main 的只读产物
 
-建树后不复制、不重装，直接用软链引用 main 已生成好的文件：
-
-```bash
-MAIN="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
-ln -s "$MAIN/node_modules" node_modules        # 各 package 的依赖目录同理
-ln -s "$MAIN/.env" .env                        # 环境变量只有一份真相，在 main
-```
+`git-worktree` 建树时自动把 main 已生成的依赖目录和 `.env` 软链进新树，不复制、不重装。lockfile 例外归该 Skill。
 
 - `.env` 只有 main 一份。本树不复制、不改写。本票需要覆盖个别变量时，在启动命令前显式 `VAR=value` 传参，不落地成第二份 env 文件。
-- 依赖目录软链 main。例外：本票改动了 lockfile 或依赖版本，必须在本树独立安装，并断掉软链——两棵树各跑各的版本。
 - 工具链不吃软链时（Metro/打包器解析异常），退回复制并在票里记录原因。
 
 ### 本树独占的可写状态
@@ -54,7 +47,7 @@ ln -s "$MAIN/.env" .env                        # 环境变量只有一份真相�
 
 ### 及时清理
 
-Worktree 是短期隔离，不是长期资产。三个清理时点：
+Worktree 是短期隔离，不是长期资产。回收、同时活跃的树上限和建树前的冲突检查都由 `git-worktree` 承担；它只删可证明安全的树，其余写明原因保留。
 
 1. 票收口时（流程第 6 步）：`git worktree remove` + 删本地和远端分支。
 2. 票废弃时：同样移除，不留"以后可能有用"的树。
@@ -64,5 +57,5 @@ Worktree 是短期隔离，不是长期资产。三个清理时点：
 
 ## 检查
 
-- 看到主目录不在 main，或看到没有 worktree 承载的任务分支 = 违反纪律，停下来盘点。
+- 看到主目录不在 main，主目录有未提交改动，或看到没有 worktree 承载的任务分支 = 违反纪律，停下来盘点。主目录的改动按 `git-worktree` 搬进任务树，不 stash。
 - 完成标准：主目录 checkout 永远是 main；`git worktree list` 只剩主目录和活跃票的树；`git branch` 的任务分支都能说出绑定的票和所在的树。

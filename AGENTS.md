@@ -1,3 +1,11 @@
+<execution_priority>
+强制适用于主执行者、子代理和受委派执行者；委派时必须带入本节。局部规范与 skill 按本节约束执行；用户明确要求或更高优先级指令除外。
+把绝大部分时间和精力用于功能实现，以当前需求的最小完整改动交付。
+禁止防御性代码和防御性操作：只处理当前明确需求与已知失败场景；不为假想风险增加兜底、重复校验、兼容层、重试、抽象、预检、备份、快照、审计或确认流程。
+验证只覆盖受影响行为和必要门禁，已有有效结果直接复用，通过即收口；只有新修改、检查失败或具体未解决问题才追加对应检查。禁止重复检验完整性、反复读回和无依据的全量验证。
+现有认证授权、外部输入边界和防数据丢失约束保持有效，在责任边界处理，不向内部链路重复铺设。
+</execution_priority>
+
 <identity>
 每次开始工作先读 repo://CONTEXT.md。使用其中的统一语言。
 交互、文档和注释使用简明中文。写短句。使用主动语态。指向具体代码、测试或文档坐标。
@@ -30,6 +38,7 @@
 当前阶段：Needs-Confirmation（用户确认后替换本行，并按项目实际改写下面的核心职责）。
 本阶段工时只排给核心职责：打通整套系统工作流程、落地基础功能、完善运行链路、完善对外 API 接口、把上述能力部署到线上内测环境。
 深度测试工程、安全扫描、网络安全专项和全面生产加固在本阶段登记进 repo://docs/deferred-hardening.md，不占用本阶段工时；只有用户明确要求时才执行。
+深度测试按被验证的链路判定，不按验证手段判定：E2E、项目验证 skill 和形式化验证覆盖五项核心职责的链路时属于本阶段工作；同等手段用于非核心链路时登记延后。
 审查照常报告安全与测试缺口，严重度按 repo://docs/agents/quality-standards.md 第 2 节判定。阻断当前正确性的安全、数据损坏和不可用问题当次修复，不进清单。
 每次对话的工作收口时更新 repo://docs/deferred-hardening.md。
 阶段退出信号：清单出现 P0 或 P1 条目；核心链路已稳定且用户开始承接外部真实流量或正式发布；用户提出安全、合规或稳定性承诺。命中任一信号时在对话中输出这句提醒：“项目应该进入下一阶段，应该更新 agents了”，并列出触发它的条目坐标。用户确认后再改本节。
@@ -87,7 +96,6 @@ main 只接收已验证提交；票收口即删树删分支。
 <constraints>
 Git 只 stage 语义相关路径。不要使用 git add .。
 不提交密钥、环境文件（.env）与一次性证据文件；其余排除项归 .gitignore。
-外部输入在边界校验一次。内部代码使用已校验的类型。
 错误必须显式、稳定、可测试。失败语义 fail-close：达不到成功标准的操作明确失败并给出自然恢复动作；每个兜底和 fallback 必须点名防的真实失败场景，答不出来就删除。
 模型只做分类、起草、摘要、抽取和判断。代码负责确定性转换、路由、重试、状态迁移和成本控制。
 不可逆操作必须等用户回复其指定的确认口令后才执行；无口令、口令错误或其他回复一律拒绝。Git 回滚、还原、切分支，移动文件到仓内备份目录，跑测试、看 diff、生成计划和只读分析默认不算不可逆。
@@ -108,6 +116,34 @@ Standards 轴先审 Coding，再审 Architecture。Spec 轴独立核对需求。
 只报告能由代码、测试、运行证据或合同证明的问题。
 测试与审查规范见 repo://docs/agents/quality-standards.md。触发：新增、修改或删除测试，评估覆盖面，代码审查、重构、自检或发现坏味道。测试变更完整应用第 6 节；审查完成第 7 节。
 </review_standard>
+
+<principle_index>
+原则叶子是用户级 Skill（principle-*，存在性由 tools/check-skills.sh 按本节检查），命中触发时先完整读叶子再动手。完整入口是用户级 Skill dimon-mode（仅显式调用）。
+- principle-model-the-domain：写有状态逻辑；新需求要给分支链再加一支或加一个要同步的标志位。
+- principle-redesign-from-first-principles：把新需求接进现有设计。
+- principle-foundational-thinking：写逻辑前定核心类型和数据结构；排脚手架与功能的顺序。
+- principle-exhaust-the-design-space：没有先例的交互或架构决定；做 2-3 个形状不同的原型并排比，再定；已有模式和 bug 修复不适用。
+- principle-experience-first：产品、体验或功能范围取舍；选用户体验，少做做好；下一个维护者也是用户。
+- principle-boundary-discipline：写校验、错误处理或框架适配；外部输入在边界校验一次，内部信任已校验的类型。
+- principle-type-system-discipline：设计类型或审函数签名；让非法状态写不出来。
+- principle-make-operations-idempotent：设计会崩溃、重启或重试的命令、步骤和循环。
+- principle-fix-root-causes：调试；要用防护挡住症状前。
+- principle-attack-the-premise：共享同一前提的两次修复栽在同一关口；先写下并验证前提，再写下一个修复。
+- principle-separate-before-serializing-shared-state：多个并发方可能写同一个文件、分支、键或状态对象。
+- principle-migrate-callers-then-delete-legacy-apis：引入新的内部 API，旧调用方还在。
+- principle-laziness-protocol：重构、评估 diff 大小，或想加抽象、分层、层层传参。
+- principle-subtract-before-you-add：安排新增、重构或重写的顺序。
+- principle-minimize-reader-load：审阅或整理难追的代码；想加一层或一个状态前。
+- principle-guard-the-context-window：大输出、长文件、反复读或扇出规划；大块交给子代理，主线只留摘要；子代理在当前任务的树里跑，同一时刻一个写者。
+- principle-test-behavior-not-implementation：写、改或保留一条测试。
+- principle-prove-it-works：宣告完成前。
+- principle-sequence-verifiable-units：多步工作、批量改动或排提交顺序；先交付可端到端验证的最小切片，每步检查绿了再走。
+- principle-explain-the-number：测量前，以及信任、报告或依据一个测出来的数字行动前。
+- principle-outcome-oriented-execution：计划好的重写或迁移；中间可以坏，终点全量验证。
+- principle-build-the-lever：非琐碎的编辑、迁移、分析或验证，准备手工逐处做时。
+- principle-encode-lessons-in-structure：第二次写同一条指令，或同一个纠正反复出现。
+- principle-never-block-on-the-human：想问“要不要做 X”，而 X 是可逆的。
+</principle_index>
 
 <principles>
 用最小充分方案完成当前任务：不能证明必要的设计不做，不能证明必要的测试不加。
