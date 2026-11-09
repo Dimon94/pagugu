@@ -6,7 +6,7 @@ Status: canonical coding standard
 
 ## 1. 适用范围与优先级
 
-本规范适用于新增或修改的应用代码、脚本、配置和测试。第三方代码、生成产物和冻结样本按最近的 AGENTS.md 处理。
+本规范适用于新增或修改的应用代码、脚本、配置和测试，执行受根 repo://AGENTS.md `<execution_priority>` 约束。第三方代码、生成产物和冻结样本按最近的 AGENTS.md 处理。
 
 规则强度：
 
@@ -66,7 +66,7 @@ DRY、SOLID、KISS 和 YAGNI 用来减少重复意义、特殊情况和无效间
 
 - 不可信输入在 transport 或持久化 seam 解析一次。
 - 解析后的 typed value 进入内部 module。Caller 不重复猜字段。
-- 执行动作前，owner 仍需重查权限、身份、当前状态和业务不变量。
+- 权限、身份、当前状态和业务不变量由执行动作的 owner 校验；内部 caller 复用该责任边界，不逐层重复校验。
 - Schema 用于跨进程、跨语言、外部输入、持久数据或有污染风险的边界。
 - 同一合同只有一个 canonical type/schema owner。
 - 禁止用 Any、any、unchecked cast、宽松 coercion 或双重断言绕过关键校验。
@@ -103,7 +103,7 @@ DRY、SOLID、KISS 和 YAGNI 用来减少重复意义、特殊情况和无效间
 - 保留的每条注释必须与所描述代码同步更新；发现过时注释即修正或删除。
 - Doc comment 只用于公开 API，且仅在行为非显然或名称与签名无法表达合同时添加。
 - 公开 API 文档描述可观察合同，不记录偶然实现细节。
-- L3-L6 注释只在 Layer Contracts 的触发面使用。
+- L3-L6 注释只在 Layer Contracts 的触发面使用。它们是 agent 的定位索引，清理普通注释时不删除；只查是否过期或逐句翻译代码，命中即按 repo://docs/agents/layer-contracts.md 第 6 节重写。
 - 文档引用使用 repo:// 坐标。
 - Unknown 保持 Unknown。不要把猜想写入合同。
 

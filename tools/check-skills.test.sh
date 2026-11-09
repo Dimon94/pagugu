@@ -31,6 +31,9 @@ run() {
 mkdir -p "$TMP/claude" "$TMP/agents"
 names="$(required)"
 grep -qx git-worktree <<<"$names" || fail "required list should include git-worktree: $names"
+# 原则叶子清单从 AGENTS.md 的 <principle_index> 读出：首尾两行都在，说明整节被读到
+grep -qx principle-model-the-domain <<<"$names" || fail "required list should include index head: $names"
+grep -qx principle-never-block-on-the-human <<<"$names" || fail "required list should include index tail: $names"
 out="$(run)" && fail "empty runtime dirs should exit 1"
 grep -q "missing git-worktree in $TMP/claude" <<<"$out" || fail "should name missing skill and dir: $out"
 grep -q "link-skills.sh" <<<"$out" || fail "should print the fix command: $out"

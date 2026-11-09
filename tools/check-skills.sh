@@ -3,7 +3,8 @@ set -euo pipefail
 
 # ---------------------------------------------------------------------
 # [L3][COORD] repo://tools/check-skills.sh
-# [INPUT]  REQUIRED_SKILLS 清单；运行时 Skill 目录（环境变量可覆盖，见 [L5]）。
+# [INPUT]  REQUIRED_SKILLS 清单 + repo://AGENTS.md <principle_index> 的原则叶子；
+#          运行时 Skill 目录（环境变量可覆盖，见 [L5]）。
 # [OUTPUT] 每个缺口一行，最后一行是汇总；全部就绪 exit 0，有缺口 exit 1。
 # [POS]    本仓指针指向的用户级 Skill 的存在性检查。Skill 正文不复制进本仓，
 #          缺了就明确失败，不让 agent 静默改用手工流程。
@@ -11,6 +12,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------
 # [L5] 清单与参数
 # REQUIRED_SKILLS     本仓文档按名字指向、执行时必须可用的 Skill。新增指针时同步加名字。
+#                     原则叶子不在这里列：从 AGENTS.md 的 <principle_index> 读出，索引是唯一清单。
 # CLAUDE_SKILLS_DIR   默认 ~/.claude/skills（Claude Code）。
 # AGENTS_SKILLS_DIR   默认 ~/.agents/skills（Codex、pi 等兼容运行时）。
 #                     两个变量名与 my-skills 的 scripts/link-skills.sh 一致。
@@ -22,7 +24,11 @@ set -euo pipefail
 #   summary missing=<N>
 # ---------------------------------------------------------------------
 
-REQUIRED_SKILLS=(git-worktree principle-boundary-discipline)
+INDEX="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/AGENTS.md"
+REQUIRED_SKILLS=(git-worktree dimon-mode)
+while read -r name; do
+  REQUIRED_SKILLS+=("$name")
+done < <(sed -n '/^<principle_index>/,/^<\/principle_index>/s/^- \(principle-[a-z-]*\)：.*/\1/p' "$INDEX")
 DIRS=("${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}" "${AGENTS_SKILLS_DIR:-$HOME/.agents/skills}")
 
 missing=0
