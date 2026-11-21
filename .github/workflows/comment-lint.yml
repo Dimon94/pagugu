@@ -1,0 +1,27 @@
+name: Comment lint
+
+"on": [pull_request, push]
+permissions:
+  contents: read
+
+jobs:
+  comment-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r tools/comment-lint/requirements.txt
+      - name: Reject new comments
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [[ "$BASE_SHA" =~ ^0+$ ]]; then
+            BASE_SHA=$(git merge-base "origin/$DEFAULT_BRANCH" HEAD || git hash-object -t tree /dev/null)
+            if [[ "$GITHUB_REF" == "refs/heads/$DEFAULT_BRANCH" ]]; then BASE_SHA=$(git hash-object -t tree /dev/null); fi
+          fi
+          python tools/comment-lint/check.py --base "$BASE_SHA"

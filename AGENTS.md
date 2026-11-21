@@ -80,7 +80,7 @@ main 只接收已验证提交；票收口即删树删分支。
 
 <layer_contracts>
 合同分 L1-L6，逐层披露。变更命中哪层更新哪层，未命中不动。
-落点：L1 = repo://docs/architecture/current-system-map.md；L2 = 最近的模块 AGENTS.md；L3 = 核心文件头部注释块；L4-L6 = 代码内注释块。
+L3 文件职责查模块地图，L4–L6 的行为、参数和过程约束查实现与测试。遗留注释块逐步清理；提交门禁 `tools/comment-lint/pre-commit` 按暂存区拒绝新增或改写的普通注释。
 规则、读写触发与模板见 repo://docs/agents/layer-contracts.md；改目标、结构、模块职责、公开导出、CLI/API/schema、状态写入或关键流程前必读。
 删除或移动文件时，更新最近的模块地图。
 新增 AGENTS.md 时，同目录创建 CLAUDE.md，内容只写 @AGENTS.md。

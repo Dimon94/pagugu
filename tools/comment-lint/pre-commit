@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+tool="$root/tools/comment-lint"
+if [ ! -f "$tool/check.py" ]; then tool=$(git rev-parse --path-format=absolute --git-common-dir)/comment-lint; fi
+uv_bin=$(command -v uv || printf '%s' "$HOME/.local/bin/uv")
+exec "$uv_bin" run --no-project --python 3.12 --with-requirements "$tool/requirements.txt" python "$tool/check.py" "$@"

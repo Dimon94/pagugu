@@ -1,0 +1,19 @@
+{
+  ".bash": "bash",
+  ".cts": "typescript",
+  ".entitlements": "xml",
+  ".gitignore": "gitignore",
+  ".mts": "typescript",
+  ".py": "python",
+  ".sh": "bash",
+  ".svg": "xml",
+  ".swift": "swift",
+  ".toml": "toml",
+  ".ts": "typescript",
+  ".xcprivacy": "xml",
+  ".xcscheme": "xml",
+  ".xcworkspacedata": "xml",
+  ".xml": "xml",
+  ".yaml": "yaml",
+  ".yml": "yaml"
+}

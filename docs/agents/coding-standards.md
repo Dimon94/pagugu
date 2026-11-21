@@ -103,7 +103,7 @@ DRY、SOLID、KISS 和 YAGNI 用来减少重复意义、特殊情况和无效间
 - 保留的每条注释必须与所描述代码同步更新；发现过时注释即修正或删除。
 - Doc comment 只用于公开 API，且仅在行为非显然或名称与签名无法表达合同时添加。
 - 公开 API 文档描述可观察合同，不记录偶然实现细节。
-- L3-L6 注释只在 Layer Contracts 的触发面使用。它们是 agent 的定位索引，清理普通注释时不删除；只查是否过期或逐句翻译代码，命中即按 repo://docs/agents/layer-contracts.md 第 6 节重写。
+- L3–L6 的落点与存量迁移见根 AGENTS.md。它们是 agent 的定位索引，清理普通注释时不删除；只查是否过期或逐句翻译代码，命中即按 repo://docs/agents/layer-contracts.md 第 6 节重写。
 - 文档引用使用 repo:// 坐标。
 - Unknown 保持 Unknown。不要把猜想写入合同。
 
